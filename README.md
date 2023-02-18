@@ -18,4 +18,5 @@ fib(15)
 
 To run locally:
 1. Clone this repository somewhere
-2. Run `cargo run --release src.txt` to run the above sample code.
+2. Run `cargo test` to verify everything works correctly
+3. Run `cargo run --release src.txt` to run the above sample code.

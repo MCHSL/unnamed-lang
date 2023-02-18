@@ -34,6 +34,7 @@ fn show_lexer_errors(input: &str, errors: Vec<Simple<char>>) {
 }
 
 fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
+    println!("{errors:?}");
     let mut colors = ColorGenerator::new();
 
     let a = colors.next();
@@ -106,8 +107,8 @@ fn show_interpreter_error(input: &str, error: interpreter::Exception) {
 }
 
 fn main() {
-    let input = "1 / \"a\"";
-    let tokens = lexer().parse(input);
+    let input = std::fs::read_to_string(std::env::args().nth(1).unwrap()).unwrap();
+    let tokens = lexer().parse(input.clone());
     let result = match tokens {
         Ok(t) => {
             let len = input.chars().count();
@@ -116,24 +117,24 @@ fn main() {
             if errors.is_empty() {
                 result.unwrap()
             } else {
-                show_parser_errors(input, errors);
+                show_parser_errors(&input, errors);
                 return;
             }
         }
         Err(e) => {
-            show_lexer_errors(input, e);
+            show_lexer_errors(&input, e);
             return;
         }
     };
 
     let mut interpreter = interpreter::Interpreter::new();
-    let result = interpreter.eval(result.get(0).unwrap());
+    let result = interpreter.eval(&result);
     match result {
         Ok(o) => {
             println!("{o:?}");
         }
         Err(e) => {
-            show_interpreter_error(input, e);
+            show_interpreter_error(&input, e);
         }
     }
 }

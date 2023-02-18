@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{
-    common::{Span, Spanned},
-    exprs::Expr,
-};
+use crate::{common::Spanned, exprs::Expr};
 
 struct Scope {
     locals: HashMap<String, Expr>,
@@ -109,8 +106,27 @@ impl Interpreter {
         None
     }
 
-    fn set(&mut self, name: String, value: Expr) {
+    fn set_new(&mut self, name: String, value: Expr) {
         self.scopes.last_mut().unwrap().set(name, value);
+    }
+
+    fn set(&mut self, name: String, value: Expr) -> bool {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains(&name) {
+                scope.set(name, value);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn has(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if scope.contains(name) {
+                return true;
+            }
+        }
+        false
     }
 
     fn create_scope(&mut self, locals: HashMap<String, Expr>) {
@@ -121,14 +137,38 @@ impl Interpreter {
         self.scopes.pop();
     }
 
+    pub fn eval_block(
+        &mut self,
+        block: &Spanned<Expr>,
+        locals: HashMap<String, Expr>,
+    ) -> IResult<Expr> {
+        let block = match &block.0 {
+            Expr::Block(exprs) => exprs,
+            _ => return exception!(block.clone(), "Expected block, got {:?}", block.0),
+        };
+
+        self.create_scope(locals);
+        let mut result = Expr::Null;
+        for expr in block {
+            result = self.eval(expr)?;
+        }
+        self.remove_scope();
+
+        Ok(result)
+    }
+
     pub fn eval(&mut self, expr: &Spanned<Expr>) -> IResult<Expr> {
         use Expr::*;
         match &expr.0 {
+            // Freestanding blocks are evaluated as if they were expressions
+            Block(_) => self.eval_block(expr, HashMap::new()),
+
             // Literals are evaluated to themselves
             Null => Ok(Null),
             Bool(b) => Ok(Bool(*b)),
             Number(n) => Ok(Number(*n)),
             Str(s) => Ok(Str(s.clone())),
+            List(l) => Ok(List(l.clone())),
 
             // Identifiers
             Ident(name) => {
@@ -139,7 +179,20 @@ impl Interpreter {
                 }
             }
 
-            // Binary expressions
+            // Unary expressions
+            Neg(e) => {
+                let e = self.eval(e)?;
+                match e {
+                    Number(n) => Ok(Number(-n)),
+                    e => exception!(expr.clone(), "Cannot negate {:?}", e),
+                }
+            }
+            Not(e) => {
+                let e = self.eval(e)?;
+                Ok(Bool(!e.is_truthy()))
+            }
+
+            // Binary arithmetic expressions
             Add(lhs, rhs) => {
                 let lhs = self.eval(lhs)?;
                 let rhs = self.eval(rhs)?;
@@ -185,12 +238,166 @@ impl Interpreter {
                     }
                 }
             }
+            Mod(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                match (lhs, rhs) {
+                    (Number(lhs), Number(rhs)) => Ok(Number(lhs % rhs)),
+                    (lhs, rhs) => {
+                        exception!(expr.clone(), "Cannot modulo {:?} by {:?}", lhs, rhs)
+                    }
+                }
+            }
+
+            // Binary logical expressions
+            And(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                Ok(Bool(lhs.is_truthy() && rhs.is_truthy()))
+            }
+            Or(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                Ok(Bool(lhs.is_truthy() || rhs.is_truthy()))
+            }
+
+            // Comparison expressions
+            EqualsEquals(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                Ok(Bool(lhs == rhs))
+            }
+            NotEquals(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                Ok(Bool(lhs != rhs))
+            }
+            LessThan(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                match (lhs, rhs) {
+                    (Number(lhs), Number(rhs)) => Ok(Bool(lhs < rhs)),
+                    (lhs, rhs) => {
+                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                    }
+                }
+            }
+            LessThanEquals(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                match (lhs, rhs) {
+                    (Number(lhs), Number(rhs)) => Ok(Bool(lhs <= rhs)),
+                    (lhs, rhs) => {
+                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                    }
+                }
+            }
+            GreaterThan(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                match (lhs, rhs) {
+                    (Number(lhs), Number(rhs)) => Ok(Bool(lhs > rhs)),
+                    (lhs, rhs) => {
+                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                    }
+                }
+            }
+            GreaterThanEquals(lhs, rhs) => {
+                let lhs = self.eval(lhs)?;
+                let rhs = self.eval(rhs)?;
+
+                match (lhs, rhs) {
+                    (Number(lhs), Number(rhs)) => Ok(Bool(lhs >= rhs)),
+                    (lhs, rhs) => {
+                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                    }
+                }
+            }
+
+            // Let
+            Let { name, initializer } => {
+                let value = self.eval(initializer)?;
+                self.set_new(name.clone(), value.clone());
+                Ok(value)
+            }
+
+            Assign { name, value } => {
+                let value = self.eval(value)?;
+
+                if self.has(name) {
+                    self.set(name.clone(), value.clone());
+                    Ok(value)
+                } else {
+                    exception!(expr.clone(), "Undefined variable '{}'", name)
+                }
+            }
+
+            // Control flow
+            If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition = self.eval(condition)?;
+
+                if condition.is_truthy() {
+                    self.eval_block(then_branch, HashMap::new())
+                } else {
+                    match else_branch {
+                        Some(else_branch) => self.eval_block(else_branch, HashMap::new()),
+                        None => Ok(Expr::Null),
+                    }
+                }
+            }
+
+            While { condition, body } => {
+                let mut result = Expr::Null;
+
+                while self.eval(condition)?.is_truthy() {
+                    result = self.eval_block(body, HashMap::new())?;
+                }
+                Ok(result)
+            }
+
+            For {
+                iteration_variable,
+                iterated_expression,
+                body,
+            } => {
+                let iterated_expression = self.eval(iterated_expression)?;
+
+                let mut result = Expr::Null;
+                match iterated_expression {
+                    Expr::List(list) => {
+                        for item in list.iter() {
+                            let mut scope = HashMap::new();
+                            scope.insert(iteration_variable.clone(), self.eval(item)?);
+                            result = self.eval_block(body, scope)?;
+                        }
+                        Ok(result)
+                    }
+                    _ => exception!(
+                        expr.clone(),
+                        "Cannot iterate over {:?}",
+                        iterated_expression
+                    ),
+                }
+            }
 
             _ => exception!(expr.clone(), "Not implemented yet: {:?}", expr.0),
         }
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::lexer::lexer;
@@ -199,7 +406,7 @@ mod tests {
     use chumsky::Stream;
 
     #[test]
-    fn test_literals() {
+    fn literals() {
         let input = "1";
         let tokens = lexer().parse(input).unwrap();
         let len = input.chars().count();
@@ -209,13 +416,13 @@ mod tests {
         let result = result.unwrap();
 
         let mut interpreter = Interpreter::new();
-        let result = interpreter.eval(result.get(0).unwrap());
+        let result = interpreter.eval(&result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Expr::Number(1.0));
     }
 
     #[test]
-    fn test_addition() {
+    fn addition() {
         let input = "1 + 1";
         let tokens = lexer().parse(input).unwrap();
         let len = input.chars().count();
@@ -225,13 +432,13 @@ mod tests {
         let result = result.unwrap();
 
         let mut interpreter = Interpreter::new();
-        let result = interpreter.eval(result.get(0).unwrap());
+        let result = interpreter.eval(&result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Expr::Number(2.0));
     }
 
     #[test]
-    fn test_error() {
+    fn error() {
         let input = "1 + \"a\"";
         let tokens = lexer().parse(input).unwrap();
         let len = input.chars().count();
@@ -241,7 +448,7 @@ mod tests {
         let result = result.unwrap();
 
         let mut interpreter = Interpreter::new();
-        let result = interpreter.eval(result.get(0).unwrap());
+        let result = interpreter.eval(&result);
         assert!(result.is_err());
     }
 }

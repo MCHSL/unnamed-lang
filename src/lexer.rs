@@ -29,80 +29,54 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let ident = text::ident().map_with_span(|i, s| (Token::Ident(i), s));
 
     // Operators
-    let plus = just('+').map(|_| Token::Plus);
-    let minus = just('-').map(|_| Token::Minus);
-    let star = just('*').map(|_| Token::Star);
-    let slash = just('/').map(|_| Token::Slash);
-    let percent = just('%').map(|_| Token::Percent);
-    let equals_equals = just("==").map(|_| Token::EqualsEquals);
-    let not_equals = just("!=").map(|_| Token::NotEquals);
-    let less_than_equals = just("<=").map(|_| Token::LessThanEquals);
-    let greater_than_equals = just(">=").map(|_| Token::GreaterThanEquals);
-    let less_than = just('<').map(|_| Token::LessThan);
-    let equals = just('=').map(|_| Token::Equals);
-    let greater_than = just('>').map(|_| Token::GreaterThan);
-    let and = just("&&").map(|_| Token::And);
-    let or = just("||").map(|_| Token::Or);
-    let not = just('!').map(|_| Token::Not);
-
     let operator = choice((
-        plus,
-        minus,
-        star,
-        slash,
-        percent,
-        equals_equals,
-        not_equals,
-        less_than_equals,
-        greater_than_equals,
-        less_than,
-        greater_than,
-        equals,
-        and,
-        or,
-        not,
+        just('+').map(|_| Token::Plus),
+        just('-').map(|_| Token::Minus),
+        just('*').map(|_| Token::Star),
+        just('/').map(|_| Token::Slash),
+        just('%').map(|_| Token::Percent),
+        just("==").map(|_| Token::EqualsEquals),
+        just("!=").map(|_| Token::NotEquals),
+        just("<=").map(|_| Token::LessThanEquals),
+        just(">=").map(|_| Token::GreaterThanEquals),
+        just('<').map(|_| Token::LessThan),
+        just('=').map(|_| Token::Equals),
+        just('>').map(|_| Token::GreaterThan),
+        just("&&").map(|_| Token::And),
+        just("||").map(|_| Token::Or),
+        just('!').map(|_| Token::Not),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("operator");
 
     // Symbols
-    let left_paren = just('(').map(|_| Token::LeftParen);
-    let right_paren = just(')').map(|_| Token::RightParen);
-    let left_brace = just('{').map(|_| Token::LeftBrace);
-    let right_brace = just('}').map(|_| Token::RightBrace);
-    let left_bracket = just('[').map(|_| Token::LeftBracket);
-    let right_bracket = just(']').map(|_| Token::RightBracket);
-    let comma = just(',').map(|_| Token::Comma);
-    let dot = just('.').map(|_| Token::Dot);
-
     let symbol = choice((
-        left_paren,
-        right_paren,
-        left_brace,
-        right_brace,
-        left_bracket,
-        right_bracket,
-        comma,
-        dot,
+        just('(').map(|_| Token::LeftParen),
+        just(')').map(|_| Token::RightParen),
+        just('{').map(|_| Token::LeftBrace),
+        just('}').map(|_| Token::RightBrace),
+        just('[').map(|_| Token::LeftBracket),
+        just(']').map(|_| Token::RightBracket),
+        just(',').map(|_| Token::Comma),
+        just('.').map(|_| Token::Dot),
+        just(';').map(|_| Token::Semicolon),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("symbol");
 
     // Keywords
-    let let_ = text::keyword("let").map(|_| Token::Let);
-    let struct_ = text::keyword("struct").map(|_| Token::Struct);
-    let if_ = text::keyword("if").map(|_| Token::If);
-    let else_ = text::keyword("else").map(|_| Token::Else);
-    let while_ = text::keyword("while").map(|_| Token::While);
-    let for_ = text::keyword("for").map(|_| Token::For);
-    let continue_ = text::keyword("continue").map(|_| Token::Continue);
-    let break_ = text::keyword("break").map(|_| Token::Break);
-    let return_ = text::keyword("return").map(|_| Token::Return);
-    let try_ = text::keyword("try").map(|_| Token::Try);
-    let catch = text::keyword("catch").map(|_| Token::Catch);
-
     let keyword = choice((
-        let_, struct_, if_, else_, while_, for_, continue_, break_, return_, try_, catch,
+        text::keyword("let").map(|_| Token::Let),
+        text::keyword("struct").map(|_| Token::Struct),
+        text::keyword("if").map(|_| Token::If),
+        text::keyword("else").map(|_| Token::Else),
+        text::keyword("while").map(|_| Token::While),
+        text::keyword("for").map(|_| Token::For),
+        text::keyword("continue").map(|_| Token::Continue),
+        text::keyword("break").map(|_| Token::Break),
+        text::keyword("return").map(|_| Token::Return),
+        text::keyword("try").map(|_| Token::Try),
+        text::keyword("catch").map(|_| Token::Catch),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("keyword");
@@ -110,7 +84,6 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     // Comments
     let line_comment = just("//").then(take_until(text::newline())).ignored();
     let block_comment = just("/*").then(take_until(just("*/"))).ignored();
-
     let comment = choice((line_comment, block_comment)).padded().repeated();
 
     // The lexer
@@ -122,11 +95,12 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         .labelled("lexer")
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_literals() {
+    fn literals() {
         let input = "null true false 123 123.456 \"hello world\"";
         let tokens: Vec<_> = lexer()
             .parse(input)
@@ -148,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn test_identifiers() {
+    fn identifiers() {
         let input = "foo bar baz";
         let tokens: Vec<_> = lexer()
             .parse(input)
@@ -167,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn test_operators() {
+    fn operators() {
         let input = "+ - * / % == != < <= > >= && || !";
         let tokens: Vec<_> = lexer()
             .parse(input)
@@ -197,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn test_symbols() {
+    fn symbols() {
         let input = "( ) { } [ ] , .";
         let tokens: Vec<_> = lexer()
             .parse(input)
@@ -221,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn test_keywords() {
+    fn keywords() {
         let input = "let struct if else while for continue break return try catch";
         let tokens: Vec<_> = lexer()
             .parse(input)
@@ -248,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn test_comments() {
+    fn comments() {
         let input = "// line comment
 		a = 1
 		/* block comment */
@@ -273,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn test_whitespace() {
+    fn whitespace() {
         let input = "a = 1
 
 
@@ -299,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_spans() {
+    fn spans() {
         let input = "a = 1";
         let tokens: Vec<_> = lexer().parse(input).unwrap().into_iter().collect();
         assert_eq!(

@@ -11,6 +11,7 @@ pub enum Expr {
     Str(String),
     Bool(bool),
     Ident(String),
+    List(Vec<Spanned<Self>>),
 
     // Math operations
     Add(BExpr, BExpr),
@@ -20,7 +21,7 @@ pub enum Expr {
     Mod(BExpr, BExpr),
 
     // Comparison operations
-    Equals(BExpr, BExpr),
+    EqualsEquals(BExpr, BExpr),
     NotEquals(BExpr, BExpr),
     LessThan(BExpr, BExpr),
     LessThanEquals(BExpr, BExpr),
@@ -56,7 +57,16 @@ pub enum Expr {
         iterated_expression: BExpr,
         body: BExpr,
     },
-    Call(BExpr, Spanned<Vec<BExpr>>),
+    Call {
+        name: BExpr,
+        args: Spanned<Vec<BExpr>>,
+    },
+
+    // Variable stuff
+    Assign {
+        name: String,
+        value: BExpr,
+    },
 }
 
 type BExpr = Box<Spanned<Expr>>;
@@ -66,6 +76,16 @@ impl Expr {
         match self {
             Expr::Ident(s) => s.clone(),
             _ => panic!("Internal compiler error: Expected identifier"),
+        }
+    }
+
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Expr::Null => false,
+            Expr::Number(n) => *n != 0.0,
+            Expr::Str(s) => !s.is_empty(),
+            Expr::Bool(b) => *b,
+            _ => true,
         }
     }
 }

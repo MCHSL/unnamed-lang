@@ -9,7 +9,7 @@ let fib = |x| {
 	} else if x == 1 {
 		1
 	} else {
-		fib(x - 1) + fib(x - 2))
+		fib(x - 1) + fib(x - 2)
 	}
 }
 

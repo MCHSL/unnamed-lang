@@ -3,6 +3,7 @@ use chumsky::{error::SimpleReason, prelude::*, Stream};
 
 mod common;
 mod exprs;
+mod interpreter;
 mod lexer;
 mod parser;
 mod token;
@@ -52,7 +53,7 @@ fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
         };
 
         if let SimpleReason::Custom(s) = error.reason() {
-            message.push_str(&format!(" {}", s));
+            message.push_str(&format!(" {s}"));
         }
 
         let expected = error.expected();
@@ -85,12 +86,27 @@ fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
         .unwrap();
 }
 
+fn show_interpreter_error(input: &str, error: interpreter::Exception) {
+    let mut colors = ColorGenerator::new();
+
+    let a = colors.next();
+
+    let mut report = Report::build(ReportKind::Error, "src.txt", 12);
+
+    report = report.with_message("Interpreter error").with_label(
+        Label::new(("src.txt", error.expr().1.clone()))
+            .with_message(error.message())
+            .with_color(a),
+    );
+
+    report
+        .finish()
+        .print(("src.txt", Source::from(input)))
+        .unwrap();
+}
+
 fn main() {
-    let input = "
-		let x = 1 + 2 * 3
-		let doinker = { 4 + 5 * 6 let
-		x + y
-		";
+    let input = "1 / \"a\"";
     let tokens = lexer().parse(input);
     let result = match tokens {
         Ok(t) => {
@@ -109,5 +125,15 @@ fn main() {
             return;
         }
     };
-    println!("{:?}", result);
+
+    let mut interpreter = interpreter::Interpreter::new();
+    let result = interpreter.eval(result.get(0).unwrap());
+    match result {
+        Ok(o) => {
+            println!("{o:?}");
+        }
+        Err(e) => {
+            show_interpreter_error(input, e);
+        }
+    }
 }

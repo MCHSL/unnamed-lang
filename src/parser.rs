@@ -49,7 +49,7 @@ pub fn parser() -> impl Parser<Token, Vec<Spanned<Expr>>, Error = Simple<Token>>
                 .delimited_by(just(Token::LeftParen), just(Token::RightParen))
                 .labelled("paren_expression");
 
-            let atom = choice((literal, ident, paren_expression, block));
+            let atom = choice((literal, paren_expression, block, ident));
 
             let call = atom
                 .clone()

@@ -49,23 +49,51 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 .delimited_by(just(Token::LeftParen), just(Token::RightParen))
                 .labelled("paren_expression");
 
-            let if_ = just(Token::If)
-                .map_with_span(|_, span: Span| ((), span))
-                .then(expr.clone())
+            let lambda = just(Token::Pipe)
+                .ignore_then(
+                    ident
+                        .separated_by(just(Token::Comma))
+                        .labelled("lambda_args"),
+                )
+                .then_ignore(just(Token::Pipe))
+                .map_with_span(|args, span: Span| (args, span))
                 .then(block.clone())
-                .then(just(Token::Else).ignore_then(block.clone()).or_not())
-                .map_with_span(
-                    |(((((), if_span), condition), then), else_), else_span: Span| {
-                        (
-                            Expr::If {
-                                condition: Box::new(condition),
-                                then_branch: Box::new(then),
-                                else_branch: else_.map(Box::new),
-                            },
-                            if_span.start()..else_span.end(),
-                        )
-                    },
-                );
+                .map_with_span(|((args, args_span), body), body_span: Span| {
+                    (
+                        Expr::Lambda {
+                            args: args
+                                .into_iter()
+                                .map(|(name, _)| name.ident_string())
+                                .collect(),
+                            body: Box::new(body),
+                        },
+                        args_span.start()..body_span.end(),
+                    )
+                });
+
+            let if_ = recursive(|if_| {
+                just(Token::If)
+                    .map_with_span(|_, span: Span| ((), span))
+                    .then(expr.clone())
+                    .then(block.clone())
+                    .then(
+                        just(Token::Else)
+                            .ignore_then(block.clone().or(if_.clone()))
+                            .or_not(),
+                    )
+                    .map_with_span(
+                        |(((((), if_span), condition), then), else_), else_span: Span| {
+                            (
+                                Expr::If {
+                                    condition: Box::new(condition),
+                                    then_branch: Box::new(then),
+                                    else_branch: else_.map(Box::new),
+                                },
+                                if_span.start()..else_span.end(),
+                            )
+                        },
+                    )
+            });
 
             let while_ = just(Token::While)
                 .map_with_span(|_, span: Span| ((), span))
@@ -81,7 +109,15 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     )
                 });
 
-            let atom = choice((literal, paren_expression, if_, while_, block.clone(), ident));
+            let atom = choice((
+                literal,
+                paren_expression,
+                if_,
+                while_,
+                lambda,
+                block.clone(),
+                ident,
+            ));
 
             let call = atom
                 .clone()

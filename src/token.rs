@@ -38,6 +38,7 @@ pub enum Token {
     Comma,
     Dot,
     Semicolon,
+    Pipe,
 
     // Keywords
     Let,
@@ -106,6 +107,7 @@ impl std::fmt::Display for Token {
             Token::Catch => write!(f, "catch"),
             Token::New => write!(f, "new"),
             Token::Semicolon => write!(f, ";"),
+            Token::Pipe => write!(f, "|"),
         }
     }
 }

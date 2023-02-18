@@ -34,7 +34,6 @@ fn show_lexer_errors(input: &str, errors: Vec<Simple<char>>) {
 }
 
 fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
-    println!("{errors:?}");
     let mut colors = ColorGenerator::new();
 
     let a = colors.next();

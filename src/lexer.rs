@@ -60,6 +60,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         just(',').map(|_| Token::Comma),
         just('.').map(|_| Token::Dot),
         just(';').map(|_| Token::Semicolon),
+        just('|').map(|_| Token::Pipe),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("symbol");

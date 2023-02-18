@@ -164,11 +164,7 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null => Ok(Null),
-            Bool(b) => Ok(Bool(*b)),
-            Number(n) => Ok(Number(*n)),
-            Str(s) => Ok(Str(s.clone())),
-            List(l) => Ok(List(l.clone())),
+            Null | Bool(_) | Number(_) | Str(_) | List(_) | Lambda { .. } => Ok(expr.0.clone()),
 
             // Identifiers
             Ident(name) => {
@@ -322,7 +318,7 @@ impl Interpreter {
                 }
             }
 
-            // Let
+            // Variable Assigment
             Let { name, initializer } => {
                 let value = self.eval(initializer)?;
                 self.set_new(name.clone(), value.clone());
@@ -352,7 +348,7 @@ impl Interpreter {
                     self.eval_block(then_branch, HashMap::new())
                 } else {
                     match else_branch {
-                        Some(else_branch) => self.eval_block(else_branch, HashMap::new()),
+                        Some(else_branch) => self.eval(else_branch),
                         None => Ok(Expr::Null),
                     }
                 }
@@ -390,6 +386,30 @@ impl Interpreter {
                         iterated_expression
                     ),
                 }
+            }
+
+            // Freestanding call
+            Call { name, args } => {
+                let name = name.0.ident_string();
+                let args: IResult<Vec<Expr>> = args.0.iter().map(|a| self.eval(a)).collect();
+                let args = args?;
+
+                let function = self.get(&name).cloned();
+                if function.is_none() {
+                    return exception!(expr.clone(), "Undefined variable {}", name);
+                };
+                let function = function.unwrap();
+                let (arg_names, body) = match function {
+                    Expr::Lambda { args, body } => (args, body),
+                    _ => return exception!(expr.clone(), "Cannot call {:?}", function),
+                };
+
+                let mut scope = HashMap::new();
+                for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
+                    scope.insert(arg_name.clone(), arg.clone());
+                }
+
+                self.eval_block(&body, scope)
             }
 
             _ => exception!(expr.clone(), "Not implemented yet: {:?}", expr.0),

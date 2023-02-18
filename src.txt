@@ -1,8 +1,13 @@
-let a = 0
-while a < 10 {
-	a = a + 1
+
+// Calculates the x'th Fibonacci number
+let fib = |x| {
+	if x == 0 {
+		0
+	} else if x == 1 {
+		1
+	} else {
+		fib(x - 1) + fib(x - 2))
+	}
 }
 
-if a == 10 {
-	7
-}
+fib(15)

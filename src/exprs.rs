@@ -42,6 +42,12 @@ pub enum Expr {
         initializer: BExpr,
     },
 
+    // Functions
+    Lambda {
+        args: Vec<String>,
+        body: BExpr,
+    },
+
     // Control flow
     If {
         condition: BExpr,

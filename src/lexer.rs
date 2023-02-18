@@ -1,8 +1,10 @@
+use std::ops::Range;
+
 use chumsky::prelude::*;
 
-use crate::token::Token;
+use crate::{common::Spanned, token::Token};
 
-pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
+pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     // Literals
     let null = text::keyword("null").map(|_| Token::Null);
     let true_ = text::keyword("true").map(|_| Token::Bool(true));
@@ -17,12 +19,14 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         .ignore_then(filter(|c| *c != '"').repeated())
         .then_ignore(just('"'))
         .collect()
-        .map(Token::String);
+        .map(Token::Str);
 
-    let literal = choice((null, boolean, number, string)).labelled("literal");
+    let literal = choice((null, boolean, number, string))
+        .map_with_span(|t, s| (t, s))
+        .labelled("literal");
 
     // Identifiers
-    let ident = text::ident().map(Token::Ident);
+    let ident = text::ident().map_with_span(|i, s| (Token::Ident(i), s));
 
     // Operators
     let plus = just('+').map(|_| Token::Plus);
@@ -30,16 +34,16 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let star = just('*').map(|_| Token::Star);
     let slash = just('/').map(|_| Token::Slash);
     let percent = just('%').map(|_| Token::Percent);
-    let equals = just('=').map(|_| Token::Equals);
-    let equals_equals = text::keyword("==").map(|_| Token::EqualsEquals);
-    let not_equals = text::keyword("!=").map(|_| Token::NotEquals);
+    let equals_equals = just("==").map(|_| Token::EqualsEquals);
+    let not_equals = just("!=").map(|_| Token::NotEquals);
+    let less_than_equals = just("<=").map(|_| Token::LessThanEquals);
+    let greater_than_equals = just(">=").map(|_| Token::GreaterThanEquals);
     let less_than = just('<').map(|_| Token::LessThan);
-    let less_than_equals = text::keyword("<=").map(|_| Token::LessThanEquals);
+    let equals = just('=').map(|_| Token::Equals);
     let greater_than = just('>').map(|_| Token::GreaterThan);
-    let greater_than_equals = text::keyword(">=").map(|_| Token::GreaterThanEquals);
-    let and = text::keyword("&&").map(|_| Token::And);
-    let or = text::keyword("||").map(|_| Token::Or);
-    let not = text::keyword("!").map(|_| Token::Not);
+    let and = just("&&").map(|_| Token::And);
+    let or = just("||").map(|_| Token::Or);
+    let not = just('!').map(|_| Token::Not);
 
     let operator = choice((
         plus,
@@ -47,17 +51,18 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         star,
         slash,
         percent,
-        equals,
         equals_equals,
         not_equals,
-        less_than,
         less_than_equals,
-        greater_than,
         greater_than_equals,
+        less_than,
+        greater_than,
+        equals,
         and,
         or,
         not,
     ))
+    .map_with_span(|t, s| (t, s))
     .labelled("operator");
 
     // Symbols
@@ -80,6 +85,7 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         comma,
         dot,
     ))
+    .map_with_span(|t, s| (t, s))
     .labelled("symbol");
 
     // Keywords
@@ -98,19 +104,211 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let keyword = choice((
         let_, struct_, if_, else_, while_, for_, continue_, break_, return_, try_, catch,
     ))
+    .map_with_span(|t, s| (t, s))
     .labelled("keyword");
 
     // Comments
-    let line_comment = text::keyword("//").map(|_| Token::LineComment);
-    let block_comment_start = text::keyword("/*").map(|_| Token::BlockCommentStart);
-    let block_comment_end = text::keyword("*/").map(|_| Token::BlockCommentEnd);
+    let line_comment = just("//").then(take_until(text::newline())).ignored();
+    let block_comment = just("/*").then(take_until(just("*/"))).ignored();
 
-    let comment =
-        choice((line_comment, block_comment_start, block_comment_end)).labelled("comment");
+    let comment = choice((line_comment, block_comment)).padded().repeated();
 
     // The lexer
-    choice((literal, ident, operator, symbol, keyword, comment))
+    choice((literal, operator, symbol, keyword, ident))
         .padded()
+        .padded_by(comment)
         .repeated()
+        .then_ignore(end())
         .labelled("lexer")
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_literals() {
+        let input = "null true false 123 123.456 \"hello world\"";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Null,
+                Token::Bool(true),
+                Token::Bool(false),
+                Token::Number(123.0),
+                Token::Number(123.456),
+                Token::Str("hello world".to_string()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_identifiers() {
+        let input = "foo bar baz";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("foo".to_string()),
+                Token::Ident("bar".to_string()),
+                Token::Ident("baz".to_string()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_operators() {
+        let input = "+ - * / % == != < <= > >= && || !";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Plus,
+                Token::Minus,
+                Token::Star,
+                Token::Slash,
+                Token::Percent,
+                Token::EqualsEquals,
+                Token::NotEquals,
+                Token::LessThan,
+                Token::LessThanEquals,
+                Token::GreaterThan,
+                Token::GreaterThanEquals,
+                Token::And,
+                Token::Or,
+                Token::Not,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_symbols() {
+        let input = "( ) { } [ ] , .";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LeftParen,
+                Token::RightParen,
+                Token::LeftBrace,
+                Token::RightBrace,
+                Token::LeftBracket,
+                Token::RightBracket,
+                Token::Comma,
+                Token::Dot,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_keywords() {
+        let input = "let struct if else while for continue break return try catch";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Let,
+                Token::Struct,
+                Token::If,
+                Token::Else,
+                Token::While,
+                Token::For,
+                Token::Continue,
+                Token::Break,
+                Token::Return,
+                Token::Try,
+                Token::Catch,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_comments() {
+        let input = "// line comment
+		a = 1
+		/* block comment */
+		b = 2";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".to_string()),
+                Token::Equals,
+                Token::Number(1.0),
+                Token::Ident("b".to_string()),
+                Token::Equals,
+                Token::Number(2.0),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_whitespace() {
+        let input = "a = 1
+
+
+
+		          b = 2";
+        let tokens: Vec<_> = lexer()
+            .parse(input)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".to_string()),
+                Token::Equals,
+                Token::Number(1.0),
+                Token::Ident("b".to_string()),
+                Token::Equals,
+                Token::Number(2.0),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_spans() {
+        let input = "a = 1";
+        let tokens: Vec<_> = lexer().parse(input).unwrap().into_iter().collect();
+        assert_eq!(
+            tokens,
+            vec![
+                (Token::Ident("a".to_string()), 0..1),
+                (Token::Equals, 2..3),
+                (Token::Number(1.0), 4..5),
+            ]
+        )
+    }
 }

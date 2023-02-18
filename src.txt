@@ -1,13 +1,21 @@
+struct Test {
+	inner
 
-// Calculates the x'th Fibonacci number
-let fib = |x| {
-	if x == 0 {
-		0
-	} else if x == 1 {
-		1
-	} else {
-		fib(x - 1) + fib(x - 2)
+	fn get_inner() {
+		self.inner
+	}
+
+	fn set_inner(x) {
+		self.inner = x
+	}
+
+	fn get_funky() {
+		self.inner(1)
 	}
 }
 
-fib(15)
+let test = new Test {
+	inner: |x| x + 1
+}
+
+test.get_funky(1)

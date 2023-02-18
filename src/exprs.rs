@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::common::Spanned;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +73,39 @@ pub enum Expr {
     // Variable stuff
     Assign {
         name: String,
+        value: BExpr,
+    },
+
+    // Structs
+    StructDefinition {
+        name: String,
+        fields: Vec<(String, Spanned<Expr>)>,
+        methods: Vec<(String, Vec<String>, Spanned<Expr>)>,
+    },
+
+    // Instance of a struct
+    Reference(usize),
+
+    // New instance
+    New {
+        name: String,
+        args: Vec<(String, Spanned<Expr>)>,
+    },
+
+    FieldAccess {
+        base: BExpr,
+        field: String,
+    },
+
+    MethodCall {
+        base: BExpr,
+        method: String,
+        args: Vec<BExpr>,
+    },
+
+    FieldAssignment {
+        base: BExpr,
+        field: String,
         value: BExpr,
     },
 }

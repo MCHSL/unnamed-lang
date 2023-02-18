@@ -60,6 +60,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         just(',').map(|_| Token::Comma),
         just('.').map(|_| Token::Dot),
         just(';').map(|_| Token::Semicolon),
+        just(':').map(|_| Token::Colon),
         just('|').map(|_| Token::Pipe),
     ))
     .map_with_span(|t, s| (t, s))
@@ -78,6 +79,8 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         text::keyword("return").map(|_| Token::Return),
         text::keyword("try").map(|_| Token::Try),
         text::keyword("catch").map(|_| Token::Catch),
+        text::keyword("new").map(|_| Token::New),
+        text::keyword("fn").map(|_| Token::Fn),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("keyword");

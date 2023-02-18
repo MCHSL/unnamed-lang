@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chumsky::prelude::*;
 
@@ -56,8 +56,16 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                         .labelled("lambda_args"),
                 )
                 .then_ignore(just(Token::Pipe))
-                .map_with_span(|args, span: Span| (args, span))
-                .then(block.clone())
+                .map_with_span(|args: Vec<Spanned<Expr>>, span: Span| (args, span))
+                .then(expr.clone().map_with_span(|(expr, expr_span), span| {
+                    (
+                        match expr {
+                            Expr::Block(stmts) => Expr::Block(stmts),
+                            expr => Expr::Block(vec![(expr, expr_span)]),
+                        },
+                        span,
+                    )
+                }))
                 .map_with_span(|((args, args_span), body), body_span: Span| {
                     (
                         Expr::Lambda {
@@ -109,12 +117,98 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     )
                 });
 
+            let init_field_assignment = ident
+                .clone()
+                .then_ignore(just(Token::Colon))
+                .then(expr.clone())
+                .map(|(name, value)| {
+                    let span = name.1.start()..value.1.end();
+                    ((name.0.ident_string(), value), span)
+                });
+
+            let new = just(Token::New)
+                .map_with_span(|_, span: Span| ((), span))
+                .then(ident)
+                .then_ignore(just(Token::LeftBrace))
+                .then(init_field_assignment.repeated())
+                .then_ignore(just(Token::RightBrace))
+                .map_with_span(
+                    |(((_, new_span), (name, _name_span)), fields), fields_span: Span| {
+                        let field_map = fields
+                            .into_iter()
+                            .map(|((name, value), _span)| (name, value))
+                            .collect();
+
+                        (
+                            Expr::New {
+                                name: name.ident_string(),
+                                args: field_map,
+                            },
+                            new_span.start()..fields_span.end(),
+                        )
+                    },
+                );
+
+            let access_chain =
+                just(Token::Dot).ignore_then(ident.clone().then(argument_list.clone().or_not()));
+
+            let access_chain = access_chain.labelled("access chain");
+
+            let access_chain = ident
+                .clone()
+                .then(access_chain.repeated())
+                .foldl(|base, ((field, field_span), args)| match args {
+                    Some(args) => {
+                        let span = base.1.start()..args.1.end();
+                        (
+                            Expr::MethodCall {
+                                base: Box::new(base),
+                                method: field.ident_string(),
+                                args: args.0.into_iter().map(Box::new).collect(),
+                            },
+                            span,
+                        )
+                    }
+                    None => {
+                        let span = base.1.start()..field_span.end();
+                        (
+                            Expr::FieldAccess {
+                                base: Box::new(base),
+                                field: field.ident_string(),
+                            },
+                            span,
+                        )
+                    }
+                })
+                .labelled("access chain")
+                .boxed();
+
+            let field_assignment = ident
+                .or(access_chain.clone())
+                .then(just(Token::Dot).ignore_then(ident.clone()))
+                .then_ignore(just(Token::Equals))
+                .then(expr.clone())
+                .map(|((base, field), value)| {
+                    let span = base.1.start()..value.1.end();
+                    (
+                        Expr::FieldAssignment {
+                            base: Box::new(base),
+                            field: field.0.ident_string(),
+                            value: Box::new(value),
+                        },
+                        span,
+                    )
+                });
+
             let atom = choice((
                 literal,
                 paren_expression,
                 if_,
                 while_,
                 lambda,
+                new,
+                field_assignment,
+                access_chain,
                 block.clone(),
                 ident,
             ));
@@ -243,7 +337,6 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 .labelled("and_or");
 
             let assignment = ident
-                .clone()
                 .then_ignore(just(Token::Equals))
                 .then(logicals.clone())
                 .map(|(name, value)| {
@@ -277,7 +370,54 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 },
             );
 
-        choice((let_, expression)).then_ignore(just(Token::Semicolon).or_not())
+        let argument_list = expression
+            .clone()
+            .separated_by(just(Token::Comma))
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen))
+            .map_with_span(|exprs, span: Span| (exprs, span))
+            .labelled("argument_list");
+
+        let method_def = just(Token::Fn)
+            .ignore_then(ident)
+            .then(argument_list)
+            .then(block.clone());
+
+        let struct_decl = just(Token::Struct)
+            .ignore_then(ident)
+            .then_ignore(just(Token::LeftBrace))
+            .then(ident.separated_by(just(Token::Comma)).allow_trailing())
+            .then(method_def.repeated())
+            .then_ignore(just(Token::RightBrace))
+            .map_with_span(
+                |(((name, name_span), field_names), methods), struct_span: Span| {
+                    let field_map = field_names
+                        .into_iter()
+                        .map(|(name, span)| (name.ident_string(), (Expr::Null, span)))
+                        .collect();
+
+                    let method_map = methods
+                        .into_iter()
+                        .map(|(((name, name_span), (args, args_span)), body)| {
+                            (
+                                name.ident_string(),
+                                args.into_iter().map(|a| a.0.ident_string()).collect(),
+                                body,
+                            )
+                        })
+                        .collect();
+
+                    (
+                        Expr::StructDefinition {
+                            name: name.ident_string(),
+                            fields: field_map,
+                            methods: method_map,
+                        },
+                        struct_span.start()..struct_span.end(),
+                    )
+                },
+            );
+
+        choice((let_, struct_decl, expression)).then_ignore(just(Token::Semicolon).or_not())
     });
 
     statement

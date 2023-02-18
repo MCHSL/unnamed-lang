@@ -38,6 +38,7 @@ pub enum Token {
     Comma,
     Dot,
     Semicolon,
+    Colon,
     Pipe,
 
     // Keywords
@@ -53,6 +54,7 @@ pub enum Token {
     Try,
     Catch,
     New,
+    Fn,
 }
 
 impl std::hash::Hash for Token {
@@ -108,6 +110,8 @@ impl std::fmt::Display for Token {
             Token::New => write!(f, "new"),
             Token::Semicolon => write!(f, ";"),
             Token::Pipe => write!(f, "|"),
+            Token::Colon => write!(f, ":"),
+            Token::Fn => write!(f, "fn"),
         }
     }
 }

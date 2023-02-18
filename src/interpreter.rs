@@ -2,8 +2,46 @@ use std::collections::HashMap;
 
 use crate::{common::Spanned, exprs::Expr};
 
+pub type NativeFunc = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
+pub type NativeMethod = fn(&mut StructInstance, Vec<Expr>) -> Result<Expr, Exception>;
+
+#[derive(Clone)]
+pub enum MethodType {
+    Native(NativeMethod),
+    UserDefined {
+        args: Vec<String>,
+        body: Spanned<Expr>,
+    },
+}
+
+impl std::fmt::Debug for MethodType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native(_) => write!(f, "Native"),
+            Self::UserDefined { args, body } => {
+                write!(f, "UserDefined {{ args: {:?}, body: {:?} }}", args, body)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StructDef {
+    name: String,
+    fields: HashMap<String, Spanned<Expr>>,
+    methods: HashMap<String, MethodType>,
+}
+
+#[derive(Debug, Clone)]
+struct StructInstance {
+    name: String,
+    fields: HashMap<String, Expr>,
+    methods: HashMap<String, MethodType>,
+}
+
 struct Scope {
     locals: HashMap<String, Expr>,
+    struct_definitions: HashMap<String, StructDef>,
 }
 
 #[derive(Debug)]
@@ -53,7 +91,10 @@ type IResult<T> = Result<T, Exception>;
 
 impl Scope {
     fn new(locals: HashMap<String, Expr>) -> Self {
-        Self { locals }
+        Self {
+            locals,
+            struct_definitions: HashMap::new(),
+        }
     }
 
     fn new_empty() -> Self {
@@ -87,12 +128,16 @@ impl Scope {
 
 pub struct Interpreter {
     scopes: Vec<Scope>,
+    instances: HashMap<usize, StructInstance>,
+    next_id: usize,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
             scopes: vec![Scope::new_empty()],
+            instances: HashMap::new(),
+            next_id: 0,
         }
     }
 
@@ -164,7 +209,9 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null | Bool(_) | Number(_) | Str(_) | List(_) | Lambda { .. } => Ok(expr.0.clone()),
+            Null | Bool(_) | Number(_) | Str(_) | List(_) | Lambda { .. } | Reference(_) => {
+                Ok(expr.0.clone())
+            }
 
             // Identifiers
             Ident(name) => {
@@ -412,7 +459,162 @@ impl Interpreter {
                 self.eval_block(&body, scope)
             }
 
-            _ => exception!(expr.clone(), "Not implemented yet: {:?}", expr.0),
+            // Struct definition
+            StructDefinition {
+                name,
+                fields,
+                methods,
+            } => {
+                let field_map = HashMap::from_iter(fields.iter().map(Clone::clone));
+                let mut method_map = HashMap::new();
+                for (name, args, body) in methods.iter().cloned() {
+                    let method = MethodType::UserDefined { args, body };
+                    method_map.insert(name, method);
+                }
+
+                self.scopes.last_mut().unwrap().struct_definitions.insert(
+                    name.clone(),
+                    StructDef {
+                        name: name.clone(),
+                        fields: field_map,
+                        methods: method_map,
+                    },
+                );
+                Ok(Expr::Null)
+            }
+
+            // Struct instantiation
+            New { name, args } => {
+                let args: Vec<(String, Result<_, _>)> = args
+                    .iter()
+                    .map(|(name, value)| (name.clone(), self.eval(value)))
+                    .collect();
+                let args: IResult<Vec<(String, Expr)>> = args
+                    .into_iter()
+                    .map(|(name, value)| value.map(|value| (name, value)))
+                    .collect();
+                let args = args?;
+
+                let struct_def = self
+                    .scopes
+                    .last()
+                    .unwrap()
+                    .struct_definitions
+                    .get(name)
+                    .cloned();
+                if struct_def.is_none() {
+                    return exception!(expr.clone(), "Undefined struct {}", name);
+                };
+                let struct_def = struct_def.unwrap();
+
+                let mut fields = HashMap::new();
+                for (field_name, default) in struct_def.fields.into_iter() {
+                    fields.insert(field_name, self.eval(&default)?);
+                }
+                for (field_name, value) in args {
+                    fields.insert(field_name.clone(), value);
+                }
+
+                let mut methods = HashMap::new();
+                for (method_name, method) in struct_def.methods.into_iter() {
+                    methods.insert(method_name, method);
+                }
+
+                let instance = StructInstance {
+                    name: name.clone(),
+                    fields,
+                    methods,
+                };
+
+                let id = self.next_id;
+                self.next_id += 1;
+                self.instances.insert(id, instance);
+
+                Ok(Expr::Reference(id))
+            }
+
+            // Struct field access
+            FieldAccess { base, field } => {
+                let base = self.eval(base)?;
+                match base {
+                    Reference(id) => {
+                        let instance = self.instances.get(&id).unwrap();
+                        Ok(instance.fields.get(field).unwrap().clone())
+                    }
+                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                }
+            }
+
+            MethodCall { base, method, args } => {
+                let base = self.eval(base)?;
+                let params: Result<Vec<Expr>, Exception> =
+                    args.iter().map(|p| self.eval(p)).collect();
+                let params = params?;
+                match base {
+                    Reference(id) => {
+                        let instance = self.instances.get_mut(&id).unwrap();
+                        let omethod = instance.methods.get(method).cloned();
+
+                        if omethod.is_some() {
+                            let method = omethod.unwrap();
+                            match method {
+                                MethodType::Native(func) => func(instance, params),
+                                MethodType::UserDefined { args, body } => {
+                                    let mut new_vars = HashMap::new();
+                                    for (name, val) in args.iter().zip(params.into_iter()) {
+                                        new_vars.insert(name.clone(), val);
+                                    }
+                                    new_vars.insert("self".to_string(), Reference(id));
+                                    self.eval_block(&body, new_vars)
+                                }
+                            }
+                        } else {
+                            let omethod = instance.fields.get(method).cloned();
+                            if omethod.is_some() {
+                                let method = omethod.unwrap();
+                                match method {
+                                    Expr::Lambda { args, body } => {
+                                        let mut new_vars = HashMap::new();
+                                        for (name, val) in args.iter().zip(params.into_iter()) {
+                                            new_vars.insert(name.clone(), val);
+                                        }
+                                        new_vars.insert("self".to_string(), Reference(id));
+                                        self.eval_block(&body, new_vars)
+                                    }
+                                    _ => exception!(
+                                        expr.clone(),
+                                        "Cannot call {:?} on {:?}",
+                                        method,
+                                        base
+                                    ),
+                                }
+                            } else {
+                                exception!(
+                                    expr.clone(),
+                                    "Undefined method {} on {:?}",
+                                    method,
+                                    base
+                                )
+                            }
+                        }
+                    }
+                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                }
+            }
+
+            FieldAssignment { base, field, value } => {
+                let base = self.eval(base)?;
+                let value = self.eval(value)?;
+
+                match base {
+                    Reference(id) => {
+                        let instance = self.instances.get_mut(&id).unwrap();
+                        instance.fields.insert(field.clone(), value);
+                        Ok(Expr::Null)
+                    }
+                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                }
+            } //_ => exception!(expr.clone(), "Not implemented yet: {:?}", expr.0),
         }
     }
 }

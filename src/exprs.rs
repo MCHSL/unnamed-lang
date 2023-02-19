@@ -46,9 +46,14 @@ pub enum Expr {
 
     // Functions
     Lambda {
-        args: Vec<String>,
+        arg_names: Vec<String>,
         body: BExpr,
         environment: HashMap<String, Expr>,
+    },
+
+    NativeFunction {
+        name: String,
+        function: interpreter::NativeFunc,
     },
 
     // Control flow

@@ -2,8 +2,23 @@ use std::collections::HashMap;
 
 use crate::{common::Spanned, exprs::Expr};
 
-pub type NativeFunc = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
+pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
+
+#[derive(Clone)]
+pub struct NativeFunc(NativeFuncPtr);
 pub type NativeMethod = fn(&mut StructInstance, Vec<Expr>) -> Result<Expr, Exception>;
+
+impl PartialEq for NativeFunc {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self as *const _, other as *const _)
+    }
+}
+
+impl std::fmt::Debug for NativeFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeFunc ({:p})", self.0 as *const ())
+    }
+}
 
 #[derive(Clone)]
 pub enum MethodType {
@@ -68,7 +83,7 @@ pub struct Exception {
 }
 
 impl Exception {
-    fn new(message: String) -> Self {
+    pub fn new(message: String) -> Self {
         Self {
             message,
             expr: (Expr::Null, 0..0),
@@ -161,11 +176,42 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self {
+        let mut this = Self {
             scopes: vec![Scope::new_empty()],
             instances: HashMap::new(),
             next_id: 0,
-        }
+        };
+
+        this.add_standard_library();
+
+        this
+    }
+
+    fn add_standard_library(&mut self) {
+        self.add_native_function("str".to_owned(), |_, args| {
+            if args.len() != 1 {
+                return Err(Exception::new(
+                    "str() takes exactly one argument".to_owned(),
+                ));
+            }
+            let arg = args[0].clone();
+            let result = match arg {
+                Expr::Str(s) => s,
+                Expr::Number(i) => i.to_string(),
+                Expr::Bool(b) => b.to_string(),
+                Expr::Null => "null".to_owned(),
+                _ => return Err(Exception::new("Invalid argument to str()".to_owned())),
+            };
+            Ok(Expr::Str(result))
+        });
+
+        self.add_native_function("print".to_owned(), |_, args| {
+            for arg in args {
+                print!("{arg:?}");
+            }
+            println!();
+            Ok(Expr::Null)
+        });
     }
 
     fn get(&self, name: &str) -> Option<&Expr> {
@@ -228,6 +274,16 @@ impl Interpreter {
         self.scopes.pop();
     }
 
+    pub fn add_native_function(&mut self, name: String, function: NativeFuncPtr) {
+        self.set_new(
+            name.clone(),
+            Expr::NativeFunction {
+                name,
+                function: NativeFunc(function),
+            },
+        );
+    }
+
     pub fn eval_block(
         &mut self,
         block: &Spanned<Expr>,
@@ -255,12 +311,22 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null | Bool(_) | Number(_) | Str(_) | List(_) | Reference(_) => Ok(expr.0.clone()),
+            Null
+            | Bool(_)
+            | Number(_)
+            | Str(_)
+            | List(_)
+            | Reference(_)
+            | NativeFunction { .. } => Ok(expr.0.clone()),
 
-            Lambda { args, body, .. } => {
+            Lambda {
+                arg_names: args,
+                body,
+                ..
+            } => {
                 let environ = self.clone_environment();
                 Ok(Lambda {
-                    args: args.clone(),
+                    arg_names: args.clone(),
                     body: body.clone(),
                     environment: environ,
                 })
@@ -499,22 +565,23 @@ impl Interpreter {
                     return exception!(expr.clone(), "Undefined variable {}", name);
                 };
                 let function = function.unwrap();
-                let (arg_names, body, env) = match function {
+                match function {
                     Expr::Lambda {
-                        args,
+                        arg_names,
                         body,
                         environment,
-                    } => (args, body, environment),
+                    } => {
+                        let mut scope = HashMap::new();
+                        for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
+                            scope.insert(arg_name.clone(), arg.clone());
+                        }
+                        scope.extend(environment);
+
+                        self.eval_block(&body, scope)
+                    }
+                    Expr::NativeFunction { name, function } => (function.0)(self, args),
                     _ => return exception!(expr.clone(), "Cannot call {:?}", function),
-                };
-
-                let mut scope = HashMap::new();
-                for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
-                    scope.insert(arg_name.clone(), arg.clone());
                 }
-                scope.extend(env);
-
-                self.eval_block(&body, scope)
             }
 
             // Struct definition
@@ -624,7 +691,7 @@ impl Interpreter {
                             if let Some(method) = omethod {
                                 match method {
                                     Expr::Lambda {
-                                        args,
+                                        arg_names: args,
                                         body,
                                         environment,
                                     } => {

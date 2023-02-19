@@ -69,7 +69,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 .map_with_span(|((args, args_span), body), body_span: Span| {
                     (
                         Expr::Lambda {
-                            args: args
+                            arg_names: args
                                 .into_iter()
                                 .map(|(name, _)| name.ident_string())
                                 .collect(),

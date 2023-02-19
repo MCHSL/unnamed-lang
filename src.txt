@@ -26,5 +26,6 @@ let test = {
 	}
 }
 
-test.get_inner()
-test.call_inner(1)
+print(test.get_inner())
+test.set_inner(10)
+print(test.get_inner())

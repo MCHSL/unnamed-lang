@@ -8,6 +8,8 @@ mod lexer;
 mod parser;
 mod token;
 
+use exprs::Expr;
+use interpreter::Exception;
 use lexer::lexer;
 use parser::parser;
 use token::Token;
@@ -127,6 +129,7 @@ fn main() {
     };
 
     let mut interpreter = interpreter::Interpreter::new();
+
     let result = interpreter.eval(&result);
     match result {
         Ok(o) => {

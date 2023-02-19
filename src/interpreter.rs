@@ -205,6 +205,25 @@ impl Interpreter {
             Ok(Expr::Str(result))
         });
 
+        self.add_native_function("num".to_owned(), |_, args| {
+            if args.len() != 1 {
+                return Err(Exception::new(
+                    "num() takes exactly one argument".to_owned(),
+                ));
+            }
+            let arg = args[0].clone();
+            let result = match arg {
+                Expr::Str(s) => s
+                    .parse::<f64>()
+                    .map_err(|_| Exception::new(format!("Could not parse \"{s}\" as a number")))?,
+                Expr::Number(i) => i,
+                Expr::Bool(b) => b as i64 as f64,
+                Expr::Null => 0.0,
+                _ => return Err(Exception::new("Invalid argument to num()".to_owned())),
+            };
+            Ok(Expr::Number(result))
+        });
+
         self.add_native_function("print".to_owned(), |_, args| {
             for arg in args {
                 print!("{arg:?}");
@@ -579,8 +598,16 @@ impl Interpreter {
 
                         self.eval_block(&body, scope)
                     }
-                    Expr::NativeFunction { name, function } => (function.0)(self, args),
-                    _ => return exception!(expr.clone(), "Cannot call {:?}", function),
+                    Expr::NativeFunction {
+                        name: _name,
+                        function,
+                    } => {
+                        let result = (function.0)(self, args);
+                        result.map_err(|e| {
+                            Exception::new_with_expr(e.message().to_owned(), expr.clone())
+                        })
+                    }
+                    _ => exception!(expr.clone(), "Cannot call {:?}", function),
                 }
             }
 

@@ -26,6 +26,4 @@ let test = {
 	}
 }
 
-print(test.get_inner())
-test.set_inner(10)
-print(test.get_inner())
+num("a")

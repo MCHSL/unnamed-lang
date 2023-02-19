@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::common::Spanned;
+use crate::{common::Spanned, interpreter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -48,6 +48,7 @@ pub enum Expr {
     Lambda {
         args: Vec<String>,
         body: BExpr,
+        environment: HashMap<String, Expr>,
     },
 
     // Control flow

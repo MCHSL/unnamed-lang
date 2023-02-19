@@ -14,6 +14,22 @@ pub enum MethodType {
     },
 }
 
+impl PartialEq for MethodType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Native(f), Self::Native(g)) => std::ptr::eq(f as *const _, g as *const _),
+            (
+                Self::UserDefined { args, body },
+                Self::UserDefined {
+                    args: args2,
+                    body: body2,
+                },
+            ) => args == args2 && body == body2,
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Debug for MethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -25,21 +41,22 @@ impl std::fmt::Debug for MethodType {
     }
 }
 
-#[derive(Debug, Clone)]
-struct StructDef {
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
     name: String,
     fields: HashMap<String, Spanned<Expr>>,
     methods: HashMap<String, MethodType>,
 }
 
 #[derive(Debug, Clone)]
-struct StructInstance {
+pub struct StructInstance {
     name: String,
     fields: HashMap<String, Expr>,
     methods: HashMap<String, MethodType>,
 }
 
-struct Scope {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scope {
     locals: HashMap<String, Expr>,
     struct_definitions: HashMap<String, StructDef>,
 }
@@ -121,8 +138,18 @@ impl Scope {
         self.locals.extend(other.locals.drain());
     }
 
-    fn extend_with(&mut self, other: &mut Self) {
+    fn get_struct(&self, name: &str) -> Option<&StructDef> {
+        self.struct_definitions.get(name)
+    }
+
+    fn set_struct(&mut self, name: String, value: StructDef) {
+        self.struct_definitions.insert(name, value);
+    }
+
+    fn extend_with(&mut self, other: &Self) {
         self.locals.extend(other.locals.clone());
+        self.struct_definitions
+            .extend(other.struct_definitions.clone());
     }
 }
 
@@ -174,8 +201,27 @@ impl Interpreter {
         false
     }
 
+    fn get_struct(&self, name: &str) -> Option<&StructDef> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(struct_def) = scope.get_struct(name) {
+                return Some(struct_def);
+            }
+        }
+        None
+    }
+
+    fn add_struct(&mut self, name: String, struct_def: StructDef) {
+        self.scopes.last_mut().unwrap().set_struct(name, struct_def);
+    }
+
+    fn clone_environment(&self) -> HashMap<String, Expr> {
+        HashMap::from_iter(self.scopes.iter().rev().flat_map(|s| s.locals.clone()))
+    }
+
     fn create_scope(&mut self, locals: HashMap<String, Expr>) {
-        self.scopes.push(Scope::new(locals));
+        let scope = Scope::new(locals);
+        //scope.extend_with(self.scopes.last().unwrap());
+        self.scopes.push(scope);
     }
 
     fn remove_scope(&mut self) {
@@ -209,8 +255,15 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null | Bool(_) | Number(_) | Str(_) | List(_) | Lambda { .. } | Reference(_) => {
-                Ok(expr.0.clone())
+            Null | Bool(_) | Number(_) | Str(_) | List(_) | Reference(_) => Ok(expr.0.clone()),
+
+            Lambda { args, body, .. } => {
+                let environ = self.clone_environment();
+                Ok(Lambda {
+                    args: args.clone(),
+                    body: body.clone(),
+                    environment: environ,
+                })
             }
 
             // Identifiers
@@ -446,8 +499,12 @@ impl Interpreter {
                     return exception!(expr.clone(), "Undefined variable {}", name);
                 };
                 let function = function.unwrap();
-                let (arg_names, body) = match function {
-                    Expr::Lambda { args, body } => (args, body),
+                let (arg_names, body, env) = match function {
+                    Expr::Lambda {
+                        args,
+                        body,
+                        environment,
+                    } => (args, body, environment),
                     _ => return exception!(expr.clone(), "Cannot call {:?}", function),
                 };
 
@@ -455,6 +512,7 @@ impl Interpreter {
                 for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
                     scope.insert(arg_name.clone(), arg.clone());
                 }
+                scope.extend(env);
 
                 self.eval_block(&body, scope)
             }
@@ -472,7 +530,7 @@ impl Interpreter {
                     method_map.insert(name, method);
                 }
 
-                self.scopes.last_mut().unwrap().struct_definitions.insert(
+                self.add_struct(
                     name.clone(),
                     StructDef {
                         name: name.clone(),
@@ -495,13 +553,7 @@ impl Interpreter {
                     .collect();
                 let args = args?;
 
-                let struct_def = self
-                    .scopes
-                    .last()
-                    .unwrap()
-                    .struct_definitions
-                    .get(name)
-                    .cloned();
+                let struct_def = self.get_struct(name).cloned();
                 if struct_def.is_none() {
                     return exception!(expr.clone(), "Undefined struct {}", name);
                 };
@@ -555,8 +607,7 @@ impl Interpreter {
                         let instance = self.instances.get_mut(&id).unwrap();
                         let omethod = instance.methods.get(method).cloned();
 
-                        if omethod.is_some() {
-                            let method = omethod.unwrap();
+                        if let Some(method) = omethod {
                             match method {
                                 MethodType::Native(func) => func(instance, params),
                                 MethodType::UserDefined { args, body } => {
@@ -570,14 +621,18 @@ impl Interpreter {
                             }
                         } else {
                             let omethod = instance.fields.get(method).cloned();
-                            if omethod.is_some() {
-                                let method = omethod.unwrap();
+                            if let Some(method) = omethod {
                                 match method {
-                                    Expr::Lambda { args, body } => {
+                                    Expr::Lambda {
+                                        args,
+                                        body,
+                                        environment,
+                                    } => {
                                         let mut new_vars = HashMap::new();
                                         for (name, val) in args.iter().zip(params.into_iter()) {
                                             new_vars.insert(name.clone(), val);
                                         }
+                                        new_vars.extend(environment);
                                         new_vars.insert("self".to_string(), Reference(id));
                                         self.eval_block(&body, new_vars)
                                     }

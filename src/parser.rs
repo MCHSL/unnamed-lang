@@ -74,6 +74,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                                 .map(|(name, _)| name.ident_string())
                                 .collect(),
                             body: Box::new(body),
+                            environment: HashMap::new(),
                         },
                         args_span.start()..body_span.end(),
                     )
@@ -118,7 +119,6 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 });
 
             let init_field_assignment = ident
-                .clone()
                 .then_ignore(just(Token::Colon))
                 .then(expr.clone())
                 .map(|(name, value)| {

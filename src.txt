@@ -9,13 +9,22 @@ struct Test {
 		self.inner = x
 	}
 
-	fn get_funky() {
-		self.inner(1)
+	fn map(f) {
+		self.inner = f(self.inner)
+	}
+
+	fn call_inner(x) {
+		self.inner(x)
 	}
 }
 
-let test = new Test {
-	inner: |x| x + 1
+let test = {
+	let a = 5
+
+	new Test {
+		inner: |x| x + a
+	}
 }
 
-test.get_funky(1)
+test.get_inner()
+test.call_inner(1)

@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use chumsky::prelude::*;
 
 use crate::{common::Spanned, token::Token};

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chumsky::prelude::*;
 
@@ -150,12 +150,11 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 );
 
             let access_chain =
-                just(Token::Dot).ignore_then(ident.clone().then(argument_list.clone().or_not()));
+                just(Token::Dot).ignore_then(ident.then(argument_list.clone().or_not()));
 
             let access_chain = access_chain.labelled("access chain");
 
             let access_chain = ident
-                .clone()
                 .then(access_chain.repeated())
                 .foldl(|base, ((field, field_span), args)| match args {
                     Some(args) => {
@@ -185,7 +184,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
 
             let field_assignment = ident
                 .or(access_chain.clone())
-                .then(just(Token::Dot).ignore_then(ident.clone()))
+                .then(just(Token::Dot).ignore_then(ident))
                 .then_ignore(just(Token::Equals))
                 .then(expr.clone())
                 .map(|((base, field), value)| {
@@ -389,7 +388,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
             .then(method_def.repeated())
             .then_ignore(just(Token::RightBrace))
             .map_with_span(
-                |(((name, name_span), field_names), methods), struct_span: Span| {
+                |(((name, _name_span), field_names), methods), struct_span: Span| {
                     let field_map = field_names
                         .into_iter()
                         .map(|(name, span)| (name.ident_string(), (Expr::Null, span)))
@@ -397,7 +396,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
 
                     let method_map = methods
                         .into_iter()
-                        .map(|(((name, name_span), (args, args_span)), body)| {
+                        .map(|(((name, _name_span), (args, _args_span)), body)| {
                             (
                                 name.ident_string(),
                                 args.into_iter().map(|a| a.0.ident_string()).collect(),
@@ -429,7 +428,6 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::lexer;
     use chumsky::Stream;
 
     #[test]

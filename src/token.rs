@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // Literals

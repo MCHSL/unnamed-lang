@@ -26,4 +26,8 @@ let test = {
 	}
 }
 
-num("a")
+let ex = new Exception {
+	message: "test"
+}
+
+ex.__str__()

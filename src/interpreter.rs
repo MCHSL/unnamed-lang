@@ -50,7 +50,7 @@ impl std::fmt::Debug for MethodType {
         match self {
             Self::Native(_) => write!(f, "Native"),
             Self::UserDefined { args, body } => {
-                write!(f, "UserDefined {{ args: {:?}, body: {:?} }}", args, body)
+                write!(f, "UserDefined {{ args: {args:?}, body: {body:?} }}")
             }
         }
     }
@@ -188,7 +188,7 @@ impl Interpreter {
     }
 
     fn add_standard_library(&mut self) {
-        self.add_native_function("str".to_owned(), |_, args| {
+        self.add_native_function("str", |_, args| {
             if args.len() != 1 {
                 return Err(Exception::new(
                     "str() takes exactly one argument".to_owned(),
@@ -205,7 +205,7 @@ impl Interpreter {
             Ok(Expr::Str(result))
         });
 
-        self.add_native_function("num".to_owned(), |_, args| {
+        self.add_native_function("num", |_, args| {
             if args.len() != 1 {
                 return Err(Exception::new(
                     "num() takes exactly one argument".to_owned(),
@@ -224,13 +224,37 @@ impl Interpreter {
             Ok(Expr::Number(result))
         });
 
-        self.add_native_function("print".to_owned(), |_, args| {
+        self.add_native_function("print", |_, args| {
             for arg in args {
                 print!("{arg:?}");
             }
             println!();
             Ok(Expr::Null)
         });
+
+        let mut exc_fields = HashMap::new();
+        exc_fields.insert("message".to_owned(), (Expr::Null, 0..0));
+
+        let mut exc_methods = HashMap::new();
+        exc_methods.insert(
+            "__str__".to_owned(),
+            MethodType::Native(|this: &mut StructInstance, _args: Vec<Expr>| {
+                let message = this.fields.get("message").unwrap();
+                match message {
+                    Expr::Str(s) => Ok(Expr::Str(format!("Exception(\"{s}\")"))),
+                    _ => Ok(Expr::Str("Exception(\"<unknown>\")".to_owned())),
+                }
+            }),
+        );
+
+        self.add_native_struct(
+            "Exception",
+            StructDef {
+                name: "Exception".to_owned(),
+                fields: exc_fields,
+                methods: exc_methods,
+            },
+        )
     }
 
     fn get(&self, name: &str) -> Option<&Expr> {
@@ -293,7 +317,8 @@ impl Interpreter {
         self.scopes.pop();
     }
 
-    pub fn add_native_function(&mut self, name: String, function: NativeFuncPtr) {
+    pub fn add_native_function<S: AsRef<str>>(&mut self, name: S, function: NativeFuncPtr) {
+        let name = name.as_ref().to_owned();
         self.set_new(
             name.clone(),
             Expr::NativeFunction {
@@ -301,6 +326,11 @@ impl Interpreter {
                 function: NativeFunc(function),
             },
         );
+    }
+
+    pub fn add_native_struct<S: AsRef<str>>(&mut self, name: S, struct_def: StructDef) {
+        let name = name.as_ref().to_owned();
+        self.add_struct(name, struct_def);
     }
 
     pub fn eval_block(

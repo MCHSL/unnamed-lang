@@ -1,4 +1,4 @@
-use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use chumsky::{error::SimpleReason, prelude::*, Stream};
 
 mod common;
@@ -8,8 +8,6 @@ mod lexer;
 mod parser;
 mod token;
 
-use exprs::Expr;
-use interpreter::Exception;
 use lexer::lexer;
 use parser::parser;
 use token::Token;

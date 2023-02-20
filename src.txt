@@ -1,33 +1,5 @@
-struct Test {
-	inner
+let socket = new Socket {}
 
-	fn get_inner() {
-		self.inner
-	}
-
-	fn set_inner(x) {
-		self.inner = x
-	}
-
-	fn map(f) {
-		self.inner = f(self.inner)
-	}
-
-	fn call_inner(x) {
-		self.inner(x)
-	}
-}
-
-let test = {
-	let a = 5
-
-	new Test {
-		inner: |x| x + a
-	}
-}
-
-let ex = new Exception {
-	message: "test"
-}
-
-ex.__str__()
+socket.connect("127.0.0.1", 1234)
+socket.send("Hello, World!")
+print(socket.recv(4096))

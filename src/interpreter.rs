@@ -1,12 +1,22 @@
 use std::collections::HashMap;
 
-use crate::{common::Spanned, exprs::Expr};
+use downcast_rs::{impl_downcast, Downcast};
+use dyn_clone::{clone_trait_object, DynClone};
+
+use crate::{
+    common::Spanned,
+    except,
+    exception::{Exception, ExceptionBuilder},
+    exprs::Expr,
+    socket::SocketBuilder,
+    structs::{StructDef, StructDefKind, StructInstance, StructInterface},
+};
 
 pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
 
 #[derive(Clone)]
 pub struct NativeFunc(NativeFuncPtr);
-pub type NativeMethod = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
+pub type NativeMethod = fn(&mut Box<dyn StructInterface>, Vec<Expr>) -> Result<Expr, Exception>;
 
 impl PartialEq for NativeFunc {
     fn eq(&self, other: &Self) -> bool {
@@ -57,66 +67,9 @@ impl std::fmt::Debug for MethodType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDef {
-    name: String,
-    fields: HashMap<String, Spanned<Expr>>,
-    methods: HashMap<String, MethodType>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructInstance {
-    name: String,
-    fields: HashMap<String, Expr>,
-    methods: HashMap<String, MethodType>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Scope {
     locals: HashMap<String, Expr>,
-    struct_definitions: HashMap<String, StructDef>,
-}
-
-#[derive(Debug)]
-pub struct Exception {
-    message: String,
-    expr: Spanned<Expr>,
-}
-
-impl Exception {
-    pub fn new(message: String) -> Self {
-        Self {
-            message,
-            expr: (Expr::Null, 0..0),
-        }
-    }
-
-    fn new_with_expr(message: String, expr: Spanned<Expr>) -> Self {
-        Self { message, expr }
-    }
-
-    pub fn expr(&self) -> &Spanned<Expr> {
-        &self.expr
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl std::fmt::Display for Exception {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Exception(\"{}\")", self.message)
-    }
-}
-
-macro_rules! exception {
-	($e:expr, $fmt_str:literal) => {
-		Err(Exception::new_with_expr($fmt_str, $e))
-	};
-
-    ($e:expr, $fmt_str:literal, $($args:expr),*) => {
-        Err(Exception::new_with_expr(format!($fmt_str, $($args),*), $e))
-    };
+    struct_definitions: HashMap<String, StructDefKind>,
 }
 
 type IResult<T> = Result<T, Exception>;
@@ -153,11 +106,11 @@ impl Scope {
         self.locals.extend(other.locals.drain());
     }
 
-    fn get_struct(&self, name: &str) -> Option<&StructDef> {
+    fn get_struct(&self, name: &str) -> Option<&StructDefKind> {
         self.struct_definitions.get(name)
     }
 
-    fn set_struct(&mut self, name: String, value: StructDef) {
+    fn set_struct(&mut self, name: String, value: StructDefKind) {
         self.struct_definitions.insert(name, value);
     }
 
@@ -170,9 +123,8 @@ impl Scope {
 
 pub struct Interpreter {
     scopes: Vec<Scope>,
-    instances: HashMap<usize, StructInstance>,
+    instances: HashMap<usize, Box<dyn StructInterface>>,
     next_id: usize,
-    this: Option<usize>,
 }
 
 impl Interpreter {
@@ -181,7 +133,6 @@ impl Interpreter {
             scopes: vec![Scope::new_empty()],
             instances: HashMap::new(),
             next_id: 0,
-            this: None,
         };
 
         this.add_standard_library();
@@ -189,36 +140,10 @@ impl Interpreter {
         this
     }
 
-    fn this(&mut self) -> Option<&mut StructInstance> {
-        self.this.map(|id| self.instances.get_mut(&id).unwrap())
-    }
-
-    fn with_this(&mut self, f: impl FnOnce(&mut StructInstance) -> IResult<Expr>) -> IResult<Expr> {
-        let instance = match self.this() {
-            Some(instance) => instance,
-            None => return Err(Exception::new("this is not defined".to_owned())),
-        };
-        f(instance)
-    }
-
-    fn with_set_this(
-        &mut self,
-        id: usize,
-        f: impl FnOnce(&mut Self) -> IResult<Expr>,
-    ) -> IResult<Expr> {
-        let old_this = self.this;
-        self.this = Some(id);
-        let result = f(self);
-        self.this = old_this;
-        result
-    }
-
     fn add_standard_library(&mut self) {
-        self.add_native_function("str", |_, args| {
+        self.add_native_function("str", |interpreter, args| {
             if args.len() != 1 {
-                return Err(Exception::new(
-                    "str() takes exactly one argument".to_owned(),
-                ));
+                return Err(Exception::new("str() takes exactly one argument"));
             }
             let arg = args[0].clone();
             let result = match arg {
@@ -226,16 +151,34 @@ impl Interpreter {
                 Expr::Number(i) => i.to_string(),
                 Expr::Bool(b) => b.to_string(),
                 Expr::Null => "null".to_owned(),
-                _ => return Err(Exception::new("Invalid argument to str()".to_owned())),
+                Expr::Reference(id) => {
+                    let instance = interpreter
+                        .instances
+                        .get_mut(&id)
+                        .ok_or_else(|| Exception::new("Invalid reference"))?;
+                    let method = instance
+                        .get_method("__str__")
+                        .ok_or_else(|| Exception::new("Invalid reference"))?;
+                    match match method {
+                        MethodType::Native(f) => f(instance, vec![])?,
+                        MethodType::UserDefined { args: _, body } => {
+                            let mut h = HashMap::new();
+                            h.insert("self".to_owned(), Expr::Reference(id));
+                            interpreter.eval_block(&body, h)?
+                        }
+                    } {
+                        Expr::Str(s) => s,
+                        _ => return Err(Exception::new("Invalid return type from __str__ method")),
+                    }
+                }
+                _ => return Err(Exception::new("Invalid argument to str()")),
             };
             Ok(Expr::Str(result))
         });
 
         self.add_native_function("num", |_, args| {
             if args.len() != 1 {
-                return Err(Exception::new(
-                    "num() takes exactly one argument".to_owned(),
-                ));
+                return Err(Exception::new("num() takes exactly one argument"));
             }
             let arg = args[0].clone();
             let result = match arg {
@@ -245,7 +188,7 @@ impl Interpreter {
                 Expr::Number(i) => i,
                 Expr::Bool(b) => b as i64 as f64,
                 Expr::Null => 0.0,
-                _ => return Err(Exception::new("Invalid argument to num()".to_owned())),
+                _ => return Err(Exception::new("Invalid argument to num()")),
             };
             Ok(Expr::Number(result))
         });
@@ -258,7 +201,14 @@ impl Interpreter {
             Ok(Expr::Null)
         });
 
-        let mut exc_fields = HashMap::new();
+        self.add_native_struct(
+            "Exception",
+            StructDefKind::Native(Box::new(ExceptionBuilder {})),
+        );
+
+        self.add_native_struct("Socket", StructDefKind::Native(Box::new(SocketBuilder {})));
+
+        /*let mut exc_fields = HashMap::new();
         exc_fields.insert("message".to_owned(), (Expr::Null, 0..0));
 
         let mut exc_methods = HashMap::new();
@@ -282,7 +232,7 @@ impl Interpreter {
                 fields: exc_fields,
                 methods: exc_methods,
             },
-        )
+        )*/
     }
 
     fn get(&self, name: &str) -> Option<&Expr> {
@@ -318,7 +268,7 @@ impl Interpreter {
         false
     }
 
-    fn get_struct(&self, name: &str) -> Option<&StructDef> {
+    fn get_struct(&self, name: &str) -> Option<&StructDefKind> {
         for scope in self.scopes.iter().rev() {
             if let Some(struct_def) = scope.get_struct(name) {
                 return Some(struct_def);
@@ -327,7 +277,7 @@ impl Interpreter {
         None
     }
 
-    fn add_struct(&mut self, name: String, struct_def: StructDef) {
+    fn add_struct(&mut self, name: String, struct_def: StructDefKind) {
         self.scopes.last_mut().unwrap().set_struct(name, struct_def);
     }
 
@@ -356,7 +306,7 @@ impl Interpreter {
         );
     }
 
-    pub fn add_native_struct<S: AsRef<str>>(&mut self, name: S, struct_def: StructDef) {
+    pub fn add_native_struct<S: AsRef<str>>(&mut self, name: S, struct_def: StructDefKind) {
         let name = name.as_ref().to_owned();
         self.add_struct(name, struct_def);
     }
@@ -368,7 +318,7 @@ impl Interpreter {
     ) -> IResult<Expr> {
         let block = match &block.0 {
             Expr::Block(exprs) => exprs,
-            _ => return exception!(block.clone(), "Expected block, got {:?}", block.0),
+            _ => return except!(block.clone(), "Expected block, got {:?}", block.0),
         };
 
         self.create_scope(locals);
@@ -414,7 +364,7 @@ impl Interpreter {
                 if let Some(expr) = self.get(name) {
                     Ok(expr.clone())
                 } else {
-                    exception!(expr.clone(), "Undefined variable '{}'", name)
+                    except!(expr.clone(), "Undefined variable '{}'", name)
                 }
             }
 
@@ -423,7 +373,7 @@ impl Interpreter {
                 let e = self.eval(e)?;
                 match e {
                     Number(n) => Ok(Number(-n)),
-                    e => exception!(expr.clone(), "Cannot negate {:?}", e),
+                    e => except!(expr.clone(), "Cannot negate {:?}", e),
                 }
             }
             Not(e) => {
@@ -440,7 +390,7 @@ impl Interpreter {
                     (Number(lhs), Number(rhs)) => Ok(Number(lhs + rhs)),
                     (Str(lhs), Str(rhs)) => Ok(Str(lhs + &rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot add {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot add {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -451,7 +401,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Number(lhs - rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot subtract {:?} from {:?}", rhs, lhs)
+                        except!(expr.clone(), "Cannot subtract {:?} from {:?}", rhs, lhs)
                     }
                 }
             }
@@ -462,7 +412,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Number(lhs * rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot multiply {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot multiply {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -473,7 +423,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Number(lhs / rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot divide {:?} by {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot divide {:?} by {:?}", lhs, rhs)
                     }
                 }
             }
@@ -484,7 +434,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Number(lhs % rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot modulo {:?} by {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot modulo {:?} by {:?}", lhs, rhs)
                     }
                 }
             }
@@ -523,7 +473,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Bool(lhs < rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -534,7 +484,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Bool(lhs <= rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -545,7 +495,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Bool(lhs > rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -556,7 +506,7 @@ impl Interpreter {
                 match (lhs, rhs) {
                     (Number(lhs), Number(rhs)) => Ok(Bool(lhs >= rhs)),
                     (lhs, rhs) => {
-                        exception!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
+                        except!(expr.clone(), "Cannot compare {:?} and {:?}", lhs, rhs)
                     }
                 }
             }
@@ -575,7 +525,7 @@ impl Interpreter {
                     self.set(name.clone(), value.clone());
                     Ok(value)
                 } else {
-                    exception!(expr.clone(), "Undefined variable '{}'", name)
+                    except!(expr.clone(), "Undefined variable '{}'", name)
                 }
             }
 
@@ -623,7 +573,7 @@ impl Interpreter {
                         }
                         Ok(result)
                     }
-                    _ => exception!(
+                    _ => except!(
                         expr.clone(),
                         "Cannot iterate over {:?}",
                         iterated_expression
@@ -639,7 +589,7 @@ impl Interpreter {
 
                 let function = self.get(&name).cloned();
                 if function.is_none() {
-                    return exception!(expr.clone(), "Undefined variable {}", name);
+                    return except!(expr.clone(), "Undefined variable {}", name);
                 };
                 let function = function.unwrap();
                 match function {
@@ -661,11 +611,9 @@ impl Interpreter {
                         function,
                     } => {
                         let result = (function.0)(self, args);
-                        result.map_err(|e| {
-                            Exception::new_with_expr(e.message().to_owned(), expr.clone())
-                        })
+                        result.map_err(|e| Exception::new_with_expr(e.message(), expr.clone()))
                     }
-                    _ => exception!(expr.clone(), "Cannot call {:?}", function),
+                    _ => except!(expr.clone(), "Cannot call {:?}", function),
                 }
             }
 
@@ -684,11 +632,11 @@ impl Interpreter {
 
                 self.add_struct(
                     name.clone(),
-                    StructDef {
+                    StructDefKind::UserDefined(StructDef {
                         name: name.clone(),
                         fields: field_map,
                         methods: method_map,
-                    },
+                    }),
                 );
                 Ok(Expr::Null)
             }
@@ -707,31 +655,39 @@ impl Interpreter {
 
                 let struct_def = self.get_struct(name).cloned();
                 if struct_def.is_none() {
-                    return exception!(expr.clone(), "Undefined struct {}", name);
+                    return except!(expr.clone(), "Undefined struct {}", name);
                 };
                 let struct_def = struct_def.unwrap();
 
-                let mut fields = HashMap::new();
-                for (field_name, default) in struct_def.fields.into_iter() {
-                    fields.insert(field_name, self.eval(&default)?);
-                }
-                for (field_name, value) in args {
-                    fields.insert(field_name.clone(), value);
-                }
-
-                let mut methods = HashMap::new();
-                for (method_name, method) in struct_def.methods.into_iter() {
-                    methods.insert(method_name, method);
-                }
-
-                let instance = StructInstance {
-                    name: name.clone(),
-                    fields,
-                    methods,
-                };
-
                 let id = self.next_id;
                 self.next_id += 1;
+
+                let instance = match struct_def {
+                    StructDefKind::UserDefined(struct_def) => {
+                        let mut fields = HashMap::new();
+                        for (field_name, default) in struct_def.fields.into_iter() {
+                            fields.insert(field_name, self.eval(&default)?);
+                        }
+                        for (field_name, value) in args {
+                            fields.insert(field_name.clone(), value);
+                        }
+
+                        let mut methods = HashMap::new();
+                        for (method_name, method) in struct_def.methods.into_iter() {
+                            methods.insert(method_name, method);
+                        }
+
+                        Box::new(StructInstance {
+                            name: name.clone(),
+                            fields,
+                            methods,
+                        })
+                    }
+                    StructDefKind::Native(constructor) => {
+                        let result = constructor.construct(args);
+                        result.map_err(|e| Exception::new_with_expr(e.message(), expr.clone()))?
+                    }
+                };
                 self.instances.insert(id, instance);
 
                 Ok(Expr::Reference(id))
@@ -743,9 +699,9 @@ impl Interpreter {
                 match base {
                     Reference(id) => {
                         let instance = self.instances.get(&id).unwrap();
-                        Ok(instance.fields.get(field).unwrap().clone())
+                        Ok(instance.get(field).unwrap())
                     }
-                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
                 }
             }
 
@@ -756,13 +712,16 @@ impl Interpreter {
                 let params = params?;
                 match base {
                     Reference(id) => {
-                        let instance = self.instances.get(&id).unwrap();
-                        let omethod = instance.methods.get(method).cloned();
+                        let instance = self.instances.get_mut(&id).unwrap();
+                        let omethod = instance.get_method(method);
 
                         if let Some(method) = omethod {
                             match method {
                                 MethodType::Native(func) => {
-                                    self.with_set_this(id, |i| func(i, params))
+                                    let result = func(instance, params);
+                                    result.map_err(|e| {
+                                        Exception::new_with_expr(e.message(), expr.clone())
+                                    })
                                 }
                                 MethodType::UserDefined { args, body } => {
                                     let mut new_vars = HashMap::new();
@@ -770,11 +729,11 @@ impl Interpreter {
                                         new_vars.insert(name.clone(), val);
                                     }
                                     new_vars.insert("self".to_string(), Reference(id));
-                                    self.with_set_this(id, |i| i.eval_block(&body, new_vars))
+                                    self.eval_block(&body, new_vars)
                                 }
                             }
                         } else {
-                            let omethod = instance.fields.get(method).cloned();
+                            let omethod = instance.get(method);
                             if let Some(method) = omethod {
                                 match method {
                                     Expr::Lambda {
@@ -788,9 +747,9 @@ impl Interpreter {
                                         }
                                         new_vars.extend(environment);
                                         new_vars.insert("self".to_string(), Reference(id));
-                                        self.with_set_this(id, |i| i.eval_block(&body, new_vars))
+                                        self.eval_block(&body, new_vars)
                                     }
-                                    _ => exception!(
+                                    _ => except!(
                                         expr.clone(),
                                         "Cannot call {:?} on {:?}",
                                         method,
@@ -798,16 +757,11 @@ impl Interpreter {
                                     ),
                                 }
                             } else {
-                                exception!(
-                                    expr.clone(),
-                                    "Undefined method {} on {:?}",
-                                    method,
-                                    base
-                                )
+                                except!(expr.clone(), "Undefined method {} on {:?}", method, base)
                             }
                         }
                     }
-                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
                 }
             }
 
@@ -818,12 +772,12 @@ impl Interpreter {
                 match base {
                     Reference(id) => {
                         let instance = self.instances.get_mut(&id).unwrap();
-                        instance.fields.insert(field.clone(), value);
+                        instance.set(field, value);
                         Ok(Expr::Null)
                     }
-                    _ => exception!(expr.clone(), "Expected reference, got {:?}", base),
+                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
                 }
-            } //_ => exception!(expr.clone(), "Not implemented yet: {:?}", expr.0),
+            } //_ => except!(expr.clone(), "Not implemented yet: {:?}", expr.0),
         }
     }
 }

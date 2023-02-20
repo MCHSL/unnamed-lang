@@ -2,10 +2,13 @@ use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use chumsky::{error::SimpleReason, prelude::*, Stream};
 
 mod common;
+mod exception;
 mod exprs;
 mod interpreter;
 mod lexer;
 mod parser;
+mod socket;
+mod structs;
 mod token;
 
 use lexer::lexer;
@@ -86,7 +89,7 @@ fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
         .unwrap();
 }
 
-fn show_interpreter_error(input: &str, error: interpreter::Exception) {
+fn show_interpreter_error(input: &str, error: exception::Exception) {
     let mut colors = ColorGenerator::new();
 
     let a = colors.next();

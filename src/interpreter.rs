@@ -6,7 +6,7 @@ pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Excepti
 
 #[derive(Clone)]
 pub struct NativeFunc(NativeFuncPtr);
-pub type NativeMethod = fn(&mut StructInstance, Vec<Expr>) -> Result<Expr, Exception>;
+pub type NativeMethod = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
 
 impl PartialEq for NativeFunc {
     fn eq(&self, other: &Self) -> bool {
@@ -172,6 +172,7 @@ pub struct Interpreter {
     scopes: Vec<Scope>,
     instances: HashMap<usize, StructInstance>,
     next_id: usize,
+    this: Option<usize>,
 }
 
 impl Interpreter {
@@ -180,11 +181,36 @@ impl Interpreter {
             scopes: vec![Scope::new_empty()],
             instances: HashMap::new(),
             next_id: 0,
+            this: None,
         };
 
         this.add_standard_library();
 
         this
+    }
+
+    fn this(&mut self) -> Option<&mut StructInstance> {
+        self.this.map(|id| self.instances.get_mut(&id).unwrap())
+    }
+
+    fn with_this(&mut self, f: impl FnOnce(&mut StructInstance) -> IResult<Expr>) -> IResult<Expr> {
+        let instance = match self.this() {
+            Some(instance) => instance,
+            None => return Err(Exception::new("this is not defined".to_owned())),
+        };
+        f(instance)
+    }
+
+    fn with_set_this(
+        &mut self,
+        id: usize,
+        f: impl FnOnce(&mut Self) -> IResult<Expr>,
+    ) -> IResult<Expr> {
+        let old_this = self.this;
+        self.this = Some(id);
+        let result = f(self);
+        self.this = old_this;
+        result
     }
 
     fn add_standard_library(&mut self) {
@@ -238,12 +264,14 @@ impl Interpreter {
         let mut exc_methods = HashMap::new();
         exc_methods.insert(
             "__str__".to_owned(),
-            MethodType::Native(|this: &mut StructInstance, _args: Vec<Expr>| {
-                let message = this.fields.get("message").unwrap();
-                match message {
-                    Expr::Str(s) => Ok(Expr::Str(format!("Exception(\"{s}\")"))),
-                    _ => Ok(Expr::Str("Exception(\"<unknown>\")".to_owned())),
-                }
+            MethodType::Native(|int: &mut Interpreter, _args: Vec<Expr>| {
+                int.with_this(|this| {
+                    let message = this.fields.get("message").unwrap();
+                    match message {
+                        Expr::Str(s) => Ok(Expr::Str(format!("Exception(\"{s}\")"))),
+                        _ => Ok(Expr::Str("Exception(\"<unknown>\")".to_owned())),
+                    }
+                })
             }),
         );
 
@@ -728,19 +756,21 @@ impl Interpreter {
                 let params = params?;
                 match base {
                     Reference(id) => {
-                        let instance = self.instances.get_mut(&id).unwrap();
+                        let instance = self.instances.get(&id).unwrap();
                         let omethod = instance.methods.get(method).cloned();
 
                         if let Some(method) = omethod {
                             match method {
-                                MethodType::Native(func) => func(instance, params),
+                                MethodType::Native(func) => {
+                                    self.with_set_this(id, |i| func(i, params))
+                                }
                                 MethodType::UserDefined { args, body } => {
                                     let mut new_vars = HashMap::new();
                                     for (name, val) in args.iter().zip(params.into_iter()) {
                                         new_vars.insert(name.clone(), val);
                                     }
                                     new_vars.insert("self".to_string(), Reference(id));
-                                    self.eval_block(&body, new_vars)
+                                    self.with_set_this(id, |i| i.eval_block(&body, new_vars))
                                 }
                             }
                         } else {
@@ -758,7 +788,7 @@ impl Interpreter {
                                         }
                                         new_vars.extend(environment);
                                         new_vars.insert("self".to_string(), Reference(id));
-                                        self.eval_block(&body, new_vars)
+                                        self.with_set_this(id, |i| i.eval_block(&body, new_vars))
                                     }
                                     _ => exception!(
                                         expr.clone(),

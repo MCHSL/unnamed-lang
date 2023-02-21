@@ -1,5 +1,6 @@
 let socket = new Socket {}
 
-socket.connect("127.0.0.1", 1234)
-socket.send("Hello, World!")
-print(socket.recv(4096))
+socket.listen("127.0.0.1", 1234)
+let client = socket.accept()
+
+client.send("Hello, world!")

@@ -18,6 +18,33 @@ impl Socket {
         }
     }
 
+    fn from_stream(stream: TcpStream) -> Self {
+        Self {
+            stream: Some(stream),
+            listener: None,
+        }
+    }
+
+    fn listen(&mut self, host: &str, port: u16) -> Result<(), String> {
+        match TcpListener::bind(format!("{host}:{port}")) {
+            Ok(listener) => {
+                self.listener = Some(listener);
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn accept(&mut self) -> Result<Self, String> {
+        match &mut self.listener {
+            Some(listener) => match listener.accept() {
+                Ok((stream, _)) => Ok(Self::from_stream(stream)),
+                Err(e) => Err(e.to_string()),
+            },
+            None => Err("Not listening".to_owned()),
+        }
+    }
+
     fn connect(&mut self, host: &str, port: u16) -> Result<(), String> {
         match TcpStream::connect(format!("{host}:{port}")) {
             Ok(stream) => {
@@ -120,6 +147,41 @@ impl StructInterface for Socket {
                         Err(e) => Err(Exception::new(e)),
                     }
                 })
+            })),
+            "close" => Some(MethodType::Native(|interpreter, _args| {
+                interpreter.with_this(|this: &mut Self| match this.close() {
+                    Ok(_) => Ok(Expr::Null),
+                    Err(e) => Err(Exception::new(e)),
+                })
+            })),
+            "listen" => Some(MethodType::Native(|interpreter, args| {
+                interpreter.with_this(|this: &mut Self| {
+                    let host = match args.get(0) {
+                        Some(Expr::Str(host)) => host,
+                        _ => return Err(Exception::new("Expected string for host")),
+                    };
+                    let port = match args.get(1) {
+                        Some(Expr::Number(port)) => *port as u16,
+                        _ => return Err(Exception::new("Expected number for port")),
+                    };
+                    match this.listen(host, port) {
+                        Ok(_) => Ok(Expr::Null),
+                        Err(e) => Err(Exception::new(e)),
+                    }
+                })
+            })),
+            "accept" => Some(MethodType::Native(|interpreter, _args| {
+                let result = interpreter.with_this(|this: &mut Self| this.accept());
+                match result {
+                    Ok(socket) => {
+                        let socket = Box::new(socket);
+                        let id = interpreter.next_id;
+                        interpreter.next_id += 1;
+                        interpreter.instances.insert(id, socket);
+                        Ok(Expr::Reference(id))
+                    }
+                    Err(e) => Err(Exception::new(e)),
+                }
             })),
             _ => None,
         }

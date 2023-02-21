@@ -123,8 +123,8 @@ impl Scope {
 
 pub struct Interpreter {
     scopes: Vec<Scope>,
-    instances: HashMap<usize, Box<dyn StructInterface>>,
-    next_id: usize,
+    pub instances: HashMap<usize, Box<dyn StructInterface>>,
+    pub next_id: usize,
     this: Option<usize>,
 }
 
@@ -163,10 +163,7 @@ impl Interpreter {
         self.this.map(|id| self.instances.get_mut(&id).unwrap())
     }
 
-    pub fn with_this<T: StructInterface>(
-        &mut self,
-        f: impl FnOnce(&mut T) -> IResult<Expr>,
-    ) -> IResult<Expr> {
+    pub fn with_this<T: StructInterface, U>(&mut self, f: impl FnOnce(&mut T) -> U) -> U {
         let this = self.get_this().unwrap();
         let this = this.downcast_mut::<T>().unwrap();
         f(this)

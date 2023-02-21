@@ -1,0 +1,8 @@
+
+let greeter = {
+	let greeting = "Hello, "
+	let closure = |name| greeting + name
+	closure
+}
+
+print(greeter("World"))

@@ -16,7 +16,7 @@ pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Excepti
 
 #[derive(Clone)]
 pub struct NativeFunc(NativeFuncPtr);
-pub type NativeMethod = fn(&mut Box<dyn StructInterface>, Vec<Expr>) -> Result<Expr, Exception>;
+pub type NativeMethod = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
 
 impl PartialEq for NativeFunc {
     fn eq(&self, other: &Self) -> bool {
@@ -125,6 +125,24 @@ pub struct Interpreter {
     scopes: Vec<Scope>,
     instances: HashMap<usize, Box<dyn StructInterface>>,
     next_id: usize,
+    this: Option<usize>,
+}
+
+macro_rules! binary_op_case {
+	($self:ident, $lhs:expr, $rhs:expr, $op:tt, $expr:expr, $error:expr) => {
+		{
+			let lhs = $self.eval($lhs)?;
+			let rhs = $self.eval($rhs)?;
+
+			match (lhs, rhs) {
+				(Number(lhs), Number(rhs)) => Ok(Number(lhs $op rhs)),
+				(Str(lhs), Str(rhs)) => Ok(Str(lhs + &rhs)),
+				(lhs, rhs) => {
+					except!($expr.clone(), $error, lhs, rhs)
+				}
+			}
+		}
+	};
 }
 
 impl Interpreter {
@@ -133,11 +151,37 @@ impl Interpreter {
             scopes: vec![Scope::new_empty()],
             instances: HashMap::new(),
             next_id: 0,
+            this: None,
         };
 
         this.add_standard_library();
 
         this
+    }
+
+    pub fn get_this(&mut self) -> Option<&mut Box<dyn StructInterface>> {
+        self.this.map(|id| self.instances.get_mut(&id).unwrap())
+    }
+
+    pub fn with_this<T: StructInterface>(
+        &mut self,
+        f: impl FnOnce(&mut T) -> IResult<Expr>,
+    ) -> IResult<Expr> {
+        let this = self.get_this().unwrap();
+        let this = this.downcast_mut::<T>().unwrap();
+        f(this)
+    }
+
+    pub fn with_set_this(
+        &mut self,
+        id: usize,
+        f: impl FnOnce(&mut Self) -> IResult<Expr>,
+    ) -> IResult<Expr> {
+        let old_this = self.this;
+        self.this = Some(id);
+        let result = f(self);
+        self.this = old_this;
+        result
     }
 
     fn add_standard_library(&mut self) {
@@ -159,14 +203,14 @@ impl Interpreter {
                     let method = instance
                         .get_method("__str__")
                         .ok_or_else(|| Exception::new("Invalid reference"))?;
-                    match match method {
-                        MethodType::Native(f) => f(instance, vec![])?,
+                    match interpreter.with_set_this(id, |interp| match method {
+                        MethodType::Native(f) => f(interp, vec![]),
                         MethodType::UserDefined { args: _, body } => {
                             let mut h = HashMap::new();
                             h.insert("self".to_owned(), Expr::Reference(id));
-                            interpreter.eval_block(&body, h)?
+                            interp.eval_block(&body, h)
                         }
-                    } {
+                    })? {
                         Expr::Str(s) => s,
                         _ => return Err(Exception::new("Invalid return type from __str__ method")),
                     }
@@ -195,7 +239,7 @@ impl Interpreter {
 
         self.add_native_function("print", |_, args| {
             for arg in args {
-                print!("{arg:?}");
+                print!("{arg}");
             }
             println!();
             Ok(Expr::Null)
@@ -207,32 +251,6 @@ impl Interpreter {
         );
 
         self.add_native_struct("Socket", StructDefKind::Native(Box::new(SocketBuilder {})));
-
-        /*let mut exc_fields = HashMap::new();
-        exc_fields.insert("message".to_owned(), (Expr::Null, 0..0));
-
-        let mut exc_methods = HashMap::new();
-        exc_methods.insert(
-            "__str__".to_owned(),
-            MethodType::Native(|int: &mut Interpreter, _args: Vec<Expr>| {
-                int.with_this(|this| {
-                    let message = this.fields.get("message").unwrap();
-                    match message {
-                        Expr::Str(s) => Ok(Expr::Str(format!("Exception(\"{s}\")"))),
-                        _ => Ok(Expr::Str("Exception(\"<unknown>\")".to_owned())),
-                    }
-                })
-            }),
-        );
-
-        self.add_native_struct(
-            "Exception",
-            StructDef {
-                name: "Exception".to_owned(),
-                fields: exc_fields,
-                methods: exc_methods,
-            },
-        )*/
     }
 
     fn get(&self, name: &str) -> Option<&Expr> {
@@ -382,61 +400,18 @@ impl Interpreter {
             }
 
             // Binary arithmetic expressions
-            Add(lhs, rhs) => {
-                let lhs = self.eval(lhs)?;
-                let rhs = self.eval(rhs)?;
-
-                match (lhs, rhs) {
-                    (Number(lhs), Number(rhs)) => Ok(Number(lhs + rhs)),
-                    (Str(lhs), Str(rhs)) => Ok(Str(lhs + &rhs)),
-                    (lhs, rhs) => {
-                        except!(expr.clone(), "Cannot add {:?} and {:?}", lhs, rhs)
-                    }
-                }
-            }
+            Add(lhs, rhs) => binary_op_case!(self, lhs, rhs, +, expr, "Cannot add {:?} and {:?}"),
             Sub(lhs, rhs) => {
-                let lhs = self.eval(lhs)?;
-                let rhs = self.eval(rhs)?;
-
-                match (lhs, rhs) {
-                    (Number(lhs), Number(rhs)) => Ok(Number(lhs - rhs)),
-                    (lhs, rhs) => {
-                        except!(expr.clone(), "Cannot subtract {:?} from {:?}", rhs, lhs)
-                    }
-                }
+                binary_op_case!(self, lhs, rhs, -, expr, "Cannot subtract {:?} from {:?}")
             }
             Mul(lhs, rhs) => {
-                let lhs = self.eval(lhs)?;
-                let rhs = self.eval(rhs)?;
-
-                match (lhs, rhs) {
-                    (Number(lhs), Number(rhs)) => Ok(Number(lhs * rhs)),
-                    (lhs, rhs) => {
-                        except!(expr.clone(), "Cannot multiply {:?} and {:?}", lhs, rhs)
-                    }
-                }
+                binary_op_case!(self, lhs, rhs, *, expr, "Cannot multiply {:?} and {:?}")
             }
             Div(lhs, rhs) => {
-                let lhs = self.eval(lhs)?;
-                let rhs = self.eval(rhs)?;
-
-                match (lhs, rhs) {
-                    (Number(lhs), Number(rhs)) => Ok(Number(lhs / rhs)),
-                    (lhs, rhs) => {
-                        except!(expr.clone(), "Cannot divide {:?} by {:?}", lhs, rhs)
-                    }
-                }
+                binary_op_case!(self, lhs, rhs, /, expr, "Cannot divide {:?} by {:?}")
             }
             Mod(lhs, rhs) => {
-                let lhs = self.eval(lhs)?;
-                let rhs = self.eval(rhs)?;
-
-                match (lhs, rhs) {
-                    (Number(lhs), Number(rhs)) => Ok(Number(lhs % rhs)),
-                    (lhs, rhs) => {
-                        except!(expr.clone(), "Cannot modulo {:?} by {:?}", lhs, rhs)
-                    }
-                }
+                binary_op_case!(self, lhs, rhs, %, expr, "Cannot modulo {:?} by {:?}")
             }
 
             // Binary logical expressions
@@ -718,7 +693,8 @@ impl Interpreter {
                         if let Some(method) = omethod {
                             match method {
                                 MethodType::Native(func) => {
-                                    let result = func(instance, params);
+                                    let result =
+                                        self.with_set_this(id, |interp| func(interp, params));
                                     result.map_err(|e| {
                                         Exception::new_with_expr(e.message(), expr.clone())
                                     })

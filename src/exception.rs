@@ -72,9 +72,8 @@ impl StructInterface for Exception {
 
     fn get_method(&self, name: &str) -> Option<MethodType> {
         match name {
-            "__str__" => Some(MethodType::Native(|this, _args| {
-                let this = this.downcast_mut::<Self>().unwrap();
-                this.__str__()
+            "__str__" => Some(MethodType::Native(|interpreter, _args| {
+                interpreter.with_this(|this: &mut Self| this.__str__())
             })),
             _ => None,
         }

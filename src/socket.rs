@@ -1,21 +1,25 @@
 use std::{
     io::{Read, Write},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
 };
 
 use crate::{exception::Exception, exprs::Expr, interpreter::MethodType, structs::StructInterface};
 
 struct Socket {
     stream: Option<TcpStream>,
+    listener: Option<TcpListener>,
 }
 
 impl Socket {
     fn new() -> Self {
-        Self { stream: None }
+        Self {
+            stream: None,
+            listener: None,
+        }
     }
 
     fn connect(&mut self, host: &str, port: u16) -> Result<(), String> {
-        match TcpStream::connect(format!("{}:{}", host, port)) {
+        match TcpStream::connect(format!("{host}:{port}")) {
             Ok(stream) => {
                 self.stream = Some(stream);
                 Ok(())
@@ -74,46 +78,48 @@ impl StructInterface for Socket {
 
     fn get_method(&self, name: &str) -> Option<crate::interpreter::MethodType> {
         match name {
-            "__str__" => Some(MethodType::Native(|this, _args| {
-                let this = this.downcast_mut::<Self>().unwrap();
-                this.__str__()
+            "__str__" => Some(MethodType::Native(|interpreter, _args| {
+                interpreter.with_this(|this: &mut Self| this.__str__())
             })),
-            "connect" => Some(MethodType::Native(|this, args| {
-                let this = this.downcast_mut::<Self>().unwrap();
-                let host = match args.get(0) {
-                    Some(Expr::Str(host)) => host,
-                    _ => return Err(Exception::new("Expected string for host")),
-                };
-                let port = match args.get(1) {
-                    Some(Expr::Number(port)) => *port as u16,
-                    _ => return Err(Exception::new("Expected number for port")),
-                };
-                match this.connect(host, port) {
-                    Ok(_) => Ok(Expr::Null),
-                    Err(e) => Err(Exception::new(e)),
-                }
+            "connect" => Some(MethodType::Native(|interpreter, args| {
+                interpreter.with_this(|this: &mut Self| {
+                    let host = match args.get(0) {
+                        Some(Expr::Str(host)) => host,
+                        _ => return Err(Exception::new("Expected string for host")),
+                    };
+                    let port = match args.get(1) {
+                        Some(Expr::Number(port)) => *port as u16,
+                        _ => return Err(Exception::new("Expected number for port")),
+                    };
+                    match this.connect(host, port) {
+                        Ok(_) => Ok(Expr::Null),
+                        Err(e) => Err(Exception::new(e)),
+                    }
+                })
             })),
-            "send" => Some(MethodType::Native(|this, args| {
-                let this = this.downcast_mut::<Self>().unwrap();
-                let data = match args.get(0) {
-                    Some(Expr::Str(data)) => data.as_bytes(),
-                    _ => return Err(Exception::new("Expected string for data")),
-                };
-                match this.send(data) {
-                    Ok(_) => Ok(Expr::Null),
-                    Err(e) => Err(Exception::new(e)),
-                }
+            "send" => Some(MethodType::Native(|interpreter, args| {
+                interpreter.with_this(|this: &mut Self| {
+                    let data = match args.get(0) {
+                        Some(Expr::Str(data)) => data.as_bytes(),
+                        _ => return Err(Exception::new("Expected string for data")),
+                    };
+                    match this.send(data) {
+                        Ok(_) => Ok(Expr::Null),
+                        Err(e) => Err(Exception::new(e)),
+                    }
+                })
             })),
-            "recv" => Some(MethodType::Native(|this, args| {
-                let this = this.downcast_mut::<Self>().unwrap();
-                let size = match args.get(0) {
-                    Some(Expr::Number(size)) => *size as usize,
-                    _ => return Err(Exception::new("Expected number for size")),
-                };
-                match this.recv(size) {
-                    Ok(data) => Ok(Expr::Str(String::from_utf8(data).unwrap())),
-                    Err(e) => Err(Exception::new(e)),
-                }
+            "recv" => Some(MethodType::Native(|interpreter, args| {
+                interpreter.with_this(|this: &mut Self| {
+                    let size = match args.get(0) {
+                        Some(Expr::Number(size)) => *size as usize,
+                        _ => return Err(Exception::new("Expected number for size")),
+                    };
+                    match this.recv(size) {
+                        Ok(data) => Ok(Expr::Str(String::from_utf8(data).unwrap())),
+                        Err(e) => Err(Exception::new(e)),
+                    }
+                })
             })),
             _ => None,
         }

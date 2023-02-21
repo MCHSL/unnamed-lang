@@ -1,0 +1,13 @@
+struct Hello {
+	recipient,
+
+	fn greet() {
+		print("Hello, " + self.recipient + "!")
+	}
+}
+
+let hello = new Hello {
+	recipient: "World"
+}
+
+hello.greet()

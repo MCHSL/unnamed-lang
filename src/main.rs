@@ -1,7 +1,7 @@
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use chumsky::{error::SimpleReason, prelude::*, Stream};
 use compiler::{lexer::lexer, parser::parser, token::Token};
-use interpreter::interpreter::MetaInterpreter;
+use interpreter::MetaInterpreter;
 use native_structs::exception::Exception;
 
 mod compiler;

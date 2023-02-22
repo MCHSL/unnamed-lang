@@ -50,10 +50,10 @@ pub struct StructInstance {
 }
 
 pub trait StructInterface: Downcast + Send + Sync {
-    fn get(&self, name: &str) -> Option<Expr> {
+    fn get(&self, _name: &str) -> Option<Expr> {
         None
     }
-    fn set(&mut self, name: &str, value: Expr) {}
+    fn set(&mut self, _name: &str, _value: Expr) {}
     fn get_method(&self, name: &str) -> Option<MethodType>;
 }
 

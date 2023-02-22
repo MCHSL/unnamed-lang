@@ -3,7 +3,7 @@ use crate::{
     native_structs::exception::Exception,
 };
 
-use super::interpreter::Interpreter;
+use super::Interpreter;
 
 pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
 

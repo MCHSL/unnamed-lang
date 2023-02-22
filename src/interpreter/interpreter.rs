@@ -1,134 +1,28 @@
 use std::{
-    cell::RefCell,
     collections::HashMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        Arc, RwLock, RwLockWriteGuard,
     },
     thread::JoinHandle,
 };
 
-use downcast_rs::{impl_downcast, Downcast};
-use dyn_clone::{clone_trait_object, DynClone};
-
 use crate::{
-    common::Spanned,
+    compiler::{common::Spanned, exprs::Expr},
     except,
-    exception::{Exception, ExceptionBuilder},
-    exprs::Expr,
-    socket::SocketBuilder,
-    structs::{StructDef, StructDefKind, StructInstance, StructInterface},
-    thread::ThreadHandle,
+    interpreter::structs::{StructDef, StructInstance},
+    native_structs::{
+        exception::{Exception, ExceptionBuilder, IResult},
+        socket::SocketBuilder,
+        thread::ThreadHandle,
+    },
 };
 
-pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
-
-#[derive(Clone)]
-pub struct NativeFunc(NativeFuncPtr);
-pub type NativeMethod = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
-
-impl PartialEq for NativeFunc {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self as *const _, other as *const _)
-    }
-}
-
-impl std::fmt::Debug for NativeFunc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NativeFunc ({:p})", self.0 as *const ())
-    }
-}
-
-#[derive(Clone)]
-pub enum MethodType {
-    Native(NativeMethod),
-    UserDefined {
-        args: Vec<String>,
-        body: Spanned<Expr>,
-    },
-}
-
-impl PartialEq for MethodType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Native(f), Self::Native(g)) => std::ptr::eq(f as *const _, g as *const _),
-            (
-                Self::UserDefined { args, body },
-                Self::UserDefined {
-                    args: args2,
-                    body: body2,
-                },
-            ) => args == args2 && body == body2,
-            _ => false,
-        }
-    }
-}
-
-impl std::fmt::Debug for MethodType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Native(_) => write!(f, "Native"),
-            Self::UserDefined { args, body } => {
-                write!(f, "UserDefined {{ args: {args:?}, body: {body:?} }}")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Scope {
-    locals: HashMap<String, Expr>,
-    struct_definitions: HashMap<String, StructDefKind>,
-}
-
-pub type IResult<T> = Result<T, Exception>;
-
-impl Scope {
-    pub fn new(locals: HashMap<String, Expr>) -> Self {
-        Self {
-            locals,
-            struct_definitions: HashMap::new(),
-        }
-    }
-
-    pub fn new_empty() -> Self {
-        Self::new(HashMap::new())
-    }
-
-    pub fn get(&self, name: &str) -> Option<&Expr> {
-        self.locals.get(name)
-    }
-
-    pub fn set(&mut self, name: String, value: Expr) {
-        self.locals.insert(name, value);
-    }
-
-    fn remove(&mut self, name: &str) {
-        self.locals.remove(name);
-    }
-
-    fn contains(&self, name: &str) -> bool {
-        self.locals.contains_key(name)
-    }
-
-    fn extend(&mut self, other: &mut Self) {
-        self.locals.extend(other.locals.drain());
-    }
-
-    pub fn get_struct(&self, name: &str) -> Option<&StructDefKind> {
-        self.struct_definitions.get(name)
-    }
-
-    pub fn set_struct(&mut self, name: String, value: StructDefKind) {
-        self.struct_definitions.insert(name, value);
-    }
-
-    fn extend_with(&mut self, other: &Self) {
-        self.locals.extend(other.locals.clone());
-        self.struct_definitions
-            .extend(other.struct_definitions.clone());
-    }
-}
+use super::{
+    method_type::{MethodType, NativeFunc, NativeFuncPtr},
+    scope::Scope,
+    structs::{StructDefKind, StructInterface},
+};
 
 pub struct Interpreter {
     scopes: Vec<Scope>,

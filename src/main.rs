@@ -1,21 +1,12 @@
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use chumsky::{error::SimpleReason, prelude::*, Stream};
+use compiler::{lexer::lexer, parser::parser, token::Token};
+use interpreter::interpreter::MetaInterpreter;
+use native_structs::exception::Exception;
 
-//mod async_interpreter;
-mod common;
-mod exception;
-mod exprs;
+mod compiler;
 mod interpreter;
-mod lexer;
-mod parser;
-mod socket;
-mod structs;
-mod thread;
-mod token;
-
-use lexer::lexer;
-use parser::parser;
-use token::Token;
+mod native_structs;
 
 fn show_lexer_errors(input: &str, errors: Vec<Simple<char>>) {
     let mut colors = ColorGenerator::new();
@@ -91,7 +82,7 @@ fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
         .unwrap();
 }
 
-fn show_interpreter_error(input: &str, error: exception::Exception) {
+fn show_interpreter_error(input: &str, error: Exception) {
     let mut colors = ColorGenerator::new();
 
     let a = colors.next();
@@ -131,7 +122,7 @@ fn main() {
         }
     };
 
-    let mut funker = interpreter::MetaInterpreter::new();
+    let mut funker = MetaInterpreter::new();
 
     let result = funker.spawn(result);
     match result.join().unwrap() {

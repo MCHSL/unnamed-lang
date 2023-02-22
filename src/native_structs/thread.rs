@@ -1,9 +1,9 @@
 use crate::{
-    exception::Exception,
-    exprs::Expr,
-    interpreter::{IResult, MethodType},
-    structs::StructInterface,
+    compiler::exprs::Expr,
+    interpreter::{method_type::MethodType, structs::StructInterface},
 };
+
+use super::exception::{Exception, IResult};
 
 pub struct ThreadHandle {
     handle: Option<std::thread::JoinHandle<IResult<Expr>>>,
@@ -18,7 +18,7 @@ impl ThreadHandle {
 
     pub fn join(&mut self) -> IResult<Expr> {
         match &mut self.handle {
-            Some(handle) => {
+            Some(_) => {
                 let handle = self.handle.take().unwrap();
                 let result = handle.join().unwrap();
                 result

@@ -3,7 +3,12 @@ use std::collections::HashMap;
 use downcast_rs::{impl_downcast, Downcast};
 use dyn_clone::{clone_trait_object, DynClone};
 
-use crate::{common::Spanned, exception::Exception, exprs::Expr, interpreter::MethodType};
+use crate::{
+    compiler::{common::Spanned, exprs::Expr},
+    native_structs::exception::Exception,
+};
+
+use super::method_type::MethodType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {

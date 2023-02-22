@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chumsky::prelude::*;
 
-use crate::{
+use super::{
     common::{Span, Spanned},
     exprs::Expr,
     token::Token,

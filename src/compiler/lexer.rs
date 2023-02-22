@@ -1,6 +1,6 @@
 use chumsky::prelude::*;
 
-use crate::{common::Spanned, token::Token};
+use super::{common::Spanned, token::Token};
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     // Literals

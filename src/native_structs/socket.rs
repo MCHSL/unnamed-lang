@@ -3,7 +3,15 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::{exception::Exception, exprs::Expr, interpreter::MethodType, structs::StructInterface};
+use crate::{
+    compiler::exprs::Expr,
+    interpreter::{
+        method_type::MethodType,
+        structs::{StructBuilder, StructInterface},
+    },
+};
+
+use super::exception::Exception;
 
 struct Socket {
     stream: Option<TcpStream>,
@@ -97,13 +105,7 @@ impl Socket {
 }
 
 impl StructInterface for Socket {
-    fn get(&self, _name: &str) -> Option<Expr> {
-        None
-    }
-
-    fn set(&mut self, _name: &str, _value: Expr) {}
-
-    fn get_method(&self, name: &str) -> Option<crate::interpreter::MethodType> {
+    fn get_method(&self, name: &str) -> Option<MethodType> {
         match name {
             "__str__" => Some(MethodType::Native(|interpreter, _args| {
                 interpreter.with_this(|this: &mut Self| this.__str__())
@@ -188,7 +190,7 @@ impl StructInterface for Socket {
 
 #[derive(Clone)]
 pub struct SocketBuilder {}
-impl crate::structs::StructBuilder for SocketBuilder {
+impl StructBuilder for SocketBuilder {
     fn construct(&self, _args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
         Ok(Box::new(Socket::new()))
     }

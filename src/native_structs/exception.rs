@@ -1,9 +1,12 @@
 use crate::{
-    common::Spanned,
-    exprs::Expr,
-    interpreter::MethodType,
-    structs::{StructBuilder, StructInterface},
+    compiler::{common::Spanned, exprs::Expr},
+    interpreter::{
+        method_type::MethodType,
+        structs::{StructBuilder, StructInterface},
+    },
 };
+
+pub type IResult<T> = Result<T, Exception>;
 
 #[derive(Debug)]
 pub struct Exception {

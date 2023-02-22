@@ -1,6 +1,8 @@
 use std::{collections::HashMap, fmt::Display};
 
-use crate::{common::Spanned, interpreter};
+use crate::interpreter::method_type::NativeFunc;
+
+use super::common::Spanned;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -53,7 +55,7 @@ pub enum Expr {
 
     NativeFunction {
         name: String,
-        function: interpreter::NativeFunc,
+        function: NativeFunc,
     },
 
     // Control flow

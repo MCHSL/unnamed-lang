@@ -53,10 +53,14 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 .ignore_then(
                     ident
                         .separated_by(just(Token::Comma))
-                        .labelled("lambda_args"),
+                        .labelled("lambda_args")
+                        .or_not()
+                        .then_ignore(just(Token::Pipe)),
                 )
-                .then_ignore(just(Token::Pipe))
-                .map_with_span(|args: Vec<Spanned<Expr>>, span: Span| (args, span))
+                .or(just(Token::Or).map(|_| None))
+                .map_with_span(|args: Option<Vec<Spanned<Expr>>>, span: Span| {
+                    (args.unwrap_or_default(), span)
+                })
                 .then(expr.clone().map_with_span(|(expr, expr_span), span| {
                     (
                         match expr {

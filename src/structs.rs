@@ -22,7 +22,7 @@ impl std::fmt::Debug for StructDefKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Native(_) => write!(f, "Native"),
-            Self::UserDefined(def) => write!(f, "UserDefined {{ {:#?} }}", def),
+            Self::UserDefined(def) => write!(f, "UserDefined {{ {def:#?} }}"),
         }
     }
 }
@@ -44,9 +44,11 @@ pub struct StructInstance {
     pub methods: HashMap<String, MethodType>,
 }
 
-pub trait StructInterface: Downcast {
-    fn get(&self, name: &str) -> Option<Expr>;
-    fn set(&mut self, name: &str, value: Expr);
+pub trait StructInterface: Downcast + Send + Sync {
+    fn get(&self, name: &str) -> Option<Expr> {
+        None
+    }
+    fn set(&mut self, name: &str, value: Expr) {}
     fn get_method(&self, name: &str) -> Option<MethodType>;
 }
 

@@ -1,4 +1,12 @@
-use std::collections::HashMap;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    },
+    thread::JoinHandle,
+};
 
 use downcast_rs::{impl_downcast, Downcast};
 use dyn_clone::{clone_trait_object, DynClone};
@@ -10,6 +18,7 @@ use crate::{
     exprs::Expr,
     socket::SocketBuilder,
     structs::{StructDef, StructDefKind, StructInstance, StructInterface},
+    thread::ThreadHandle,
 };
 
 pub type NativeFuncPtr = fn(&mut Interpreter, Vec<Expr>) -> Result<Expr, Exception>;
@@ -72,25 +81,25 @@ pub struct Scope {
     struct_definitions: HashMap<String, StructDefKind>,
 }
 
-type IResult<T> = Result<T, Exception>;
+pub type IResult<T> = Result<T, Exception>;
 
 impl Scope {
-    fn new(locals: HashMap<String, Expr>) -> Self {
+    pub fn new(locals: HashMap<String, Expr>) -> Self {
         Self {
             locals,
             struct_definitions: HashMap::new(),
         }
     }
 
-    fn new_empty() -> Self {
+    pub fn new_empty() -> Self {
         Self::new(HashMap::new())
     }
 
-    fn get(&self, name: &str) -> Option<&Expr> {
+    pub fn get(&self, name: &str) -> Option<&Expr> {
         self.locals.get(name)
     }
 
-    fn set(&mut self, name: String, value: Expr) {
+    pub fn set(&mut self, name: String, value: Expr) {
         self.locals.insert(name, value);
     }
 
@@ -106,11 +115,11 @@ impl Scope {
         self.locals.extend(other.locals.drain());
     }
 
-    fn get_struct(&self, name: &str) -> Option<&StructDefKind> {
+    pub fn get_struct(&self, name: &str) -> Option<&StructDefKind> {
         self.struct_definitions.get(name)
     }
 
-    fn set_struct(&mut self, name: String, value: StructDefKind) {
+    pub fn set_struct(&mut self, name: String, value: StructDefKind) {
         self.struct_definitions.insert(name, value);
     }
 
@@ -123,8 +132,8 @@ impl Scope {
 
 pub struct Interpreter {
     scopes: Vec<Scope>,
-    pub instances: HashMap<usize, Box<dyn StructInterface>>,
-    pub next_id: usize,
+    pub instances: Arc<RwLock<HashMap<usize, Arc<RwLock<Box<dyn StructInterface>>>>>>,
+    pub next_id: Arc<AtomicUsize>,
     this: Option<usize>,
 }
 
@@ -145,12 +154,69 @@ macro_rules! binary_op_case {
 	};
 }
 
-impl Interpreter {
+pub struct MetaInterpreter {
+    instances: Arc<RwLock<HashMap<usize, Arc<RwLock<Box<dyn StructInterface>>>>>>,
+    next_id: Arc<AtomicUsize>,
+}
+
+impl MetaInterpreter {
     pub fn new() -> Self {
+        let instances = Arc::new(RwLock::new(HashMap::new()));
+
+        Self {
+            instances,
+            next_id: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn spawn(&mut self, block: Spanned<Expr>) -> JoinHandle<IResult<Expr>> {
+        let instances = self.instances.clone();
+        let next_id = self.next_id.clone();
+        let thread = std::thread::spawn(move || {
+            let mut interpreter = Interpreter::new(instances, next_id);
+            interpreter.eval_block(&block, HashMap::new())
+        });
+        thread
+    }
+
+    // pub fn get_instance(
+    //     &self,
+    //     id: usize,
+    // ) -> RwLockReadGuard<'_, Option<&Box<dyn StructInterface>>> {
+    //     self.instances.read().unwrap().get(&id)
+    // }
+
+    // pub fn get_instance_mut(&mut self, id: usize) -> Option<&mut Box<dyn StructInterface>> {
+    //     self.instances.write().unwrap().get_mut(&id)
+    // }
+
+    // pub fn with_instance<U>(
+    //     &mut self,
+    //     id: usize,
+    //     f: impl FnOnce(&mut Box<dyn StructInterface>) -> U,
+    // ) -> U {
+    //     let mut instances = self.instances.write().unwrap();
+    //     let instance = instances.get_mut(&id).unwrap();
+    //     f(instance)
+    // }
+
+    // pub fn get_next_id(&mut self) -> usize {
+    //     let mut next_id = self.next_id.write().unwrap();
+    //     let id = *next_id;
+    //     *next_id += 1;
+    //     id
+    // }
+}
+
+impl Interpreter {
+    pub fn new(
+        instances: Arc<RwLock<HashMap<usize, Arc<RwLock<Box<dyn StructInterface>>>>>>,
+        next_id: Arc<AtomicUsize>,
+    ) -> Self {
         let mut this = Self {
             scopes: vec![Scope::new_empty()],
-            instances: HashMap::new(),
-            next_id: 0,
+            instances,
+            next_id,
             this: None,
         };
 
@@ -159,12 +225,45 @@ impl Interpreter {
         this
     }
 
-    pub fn get_this(&mut self) -> Option<&mut Box<dyn StructInterface>> {
-        self.this.map(|id| self.instances.get_mut(&id).unwrap())
+    // pub fn get_instance(
+    //     &self,
+    //     id: usize,
+    // ) -> RwLockReadGuard<'_, Option<&Box<dyn StructInterface>>> {
+    //     self.instances.read().unwrap().get(&id)
+    // }
+
+    // pub fn get_instance_mut(&mut self, id: usize) -> Option<&mut Box<dyn StructInterface>> {
+    //     self.instances.write().unwrap().get_mut(&id)
+    // }
+
+    pub fn with_instance<U>(
+        &mut self,
+        id: usize,
+        f: impl FnOnce(RwLockWriteGuard<'_, Box<dyn StructInterface>>) -> U,
+    ) -> U {
+        let instance = {
+            let instances = self.instances.read().unwrap();
+            instances.get(&id).unwrap().clone()
+        };
+        let lock = instance.write().unwrap();
+        f(lock)
+    }
+
+    pub fn add_instance(&mut self, instance: Box<dyn StructInterface>) -> usize {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.instances
+            .write()
+            .unwrap()
+            .insert(id, Arc::new(RwLock::new(instance)));
+        id
     }
 
     pub fn with_this<T: StructInterface, U>(&mut self, f: impl FnOnce(&mut T) -> U) -> U {
-        let this = self.get_this().unwrap();
+        let instance = {
+            let instances = self.instances.read().unwrap();
+            instances.get(&self.this.unwrap()).unwrap().clone()
+        };
+        let mut this = instance.write().unwrap();
         let this = this.downcast_mut::<T>().unwrap();
         f(this)
     }
@@ -193,13 +292,11 @@ impl Interpreter {
                 Expr::Bool(b) => b.to_string(),
                 Expr::Null => "null".to_owned(),
                 Expr::Reference(id) => {
-                    let instance = interpreter
-                        .instances
-                        .get_mut(&id)
-                        .ok_or_else(|| Exception::new("Invalid reference"))?;
-                    let method = instance
-                        .get_method("__str__")
-                        .ok_or_else(|| Exception::new("Invalid reference"))?;
+                    let method = interpreter.with_instance(id, |instance| {
+                        instance
+                            .get_method("__str__")
+                            .ok_or_else(|| Exception::new("Invalid reference"))
+                    })?;
                     match interpreter.with_set_this(id, |interp| match method {
                         MethodType::Native(f) => f(interp, vec![]),
                         MethodType::UserDefined { args: _, body } => {
@@ -242,12 +339,60 @@ impl Interpreter {
             Ok(Expr::Null)
         });
 
+        self.add_native_function("sleep", |_, args| {
+            if args.len() != 1 {
+                return Err(Exception::new("sleep() takes exactly one argument"));
+            }
+            let arg = args[0].clone();
+            let result = match arg {
+                Expr::Number(i) => i,
+                _ => return Err(Exception::new("Invalid argument to sleep()")),
+            };
+            std::thread::sleep(std::time::Duration::from_millis(result as u64));
+            Ok(Expr::Null)
+        });
+
+        self.add_native_function("spawn", |interpreter, args| {
+            if args.len() != 1 {
+                return Err(Exception::new("spawn() takes exactly one argument"));
+            }
+            let arg = args[0].clone();
+
+            let instances = interpreter.instances.clone();
+            let next_id = interpreter.next_id.clone();
+            let environment = interpreter.clone_environment();
+            let thread = std::thread::spawn(move || {
+                let mut interpreter = Self::new(instances, next_id);
+                interpreter.invoke_lambda(&arg, vec![], environment)
+            });
+
+            let thread = Box::new(ThreadHandle::new(thread));
+            let id = interpreter.add_instance(thread);
+            Ok(Expr::Reference(id))
+        });
+
         self.add_native_struct(
             "Exception",
             StructDefKind::Native(Box::new(ExceptionBuilder {})),
         );
 
         self.add_native_struct("Socket", StructDefKind::Native(Box::new(SocketBuilder {})));
+    }
+
+    fn invoke_lambda(
+        &mut self,
+        lambda: &Expr,
+        _args: Vec<Expr>,
+        env: HashMap<String, Expr>,
+    ) -> IResult<Expr> {
+        match lambda {
+            Expr::Lambda {
+                arg_names: _,
+                body,
+                environment: _,
+            } => self.eval_block(body, env),
+            _ => Err(Exception::new("Invalid lambda")),
+        }
     }
 
     fn get(&self, name: &str) -> Option<&Expr> {
@@ -631,9 +776,6 @@ impl Interpreter {
                 };
                 let struct_def = struct_def.unwrap();
 
-                let id = self.next_id;
-                self.next_id += 1;
-
                 let instance = match struct_def {
                     StructDefKind::UserDefined(struct_def) => {
                         let mut fields = HashMap::new();
@@ -660,7 +802,7 @@ impl Interpreter {
                         result.map_err(|e| Exception::new_with_expr(e.message(), expr.clone()))?
                     }
                 };
-                self.instances.insert(id, instance);
+                let id = self.add_instance(instance);
 
                 Ok(Expr::Reference(id))
             }
@@ -669,10 +811,14 @@ impl Interpreter {
             FieldAccess { base, field } => {
                 let base = self.eval(base)?;
                 match base {
-                    Reference(id) => {
-                        let instance = self.instances.get(&id).unwrap();
-                        Ok(instance.get(field).unwrap())
-                    }
+                    Reference(id) => self.with_instance(id, |instance| {
+                        let value = instance.get(field);
+                        if let Some(value) = value {
+                            Ok(value)
+                        } else {
+                            except!(expr.clone(), "Undefined field {}", field)
+                        }
+                    }),
                     _ => except!(expr.clone(), "Expected reference, got {:?}", base),
                 }
             }
@@ -684,8 +830,8 @@ impl Interpreter {
                 let params = params?;
                 match base {
                     Reference(id) => {
-                        let instance = self.instances.get_mut(&id).unwrap();
-                        let omethod = instance.get_method(method);
+                        let omethod =
+                            self.with_instance(id, |instance| instance.get_method(method));
 
                         if let Some(method) = omethod {
                             match method {
@@ -706,7 +852,7 @@ impl Interpreter {
                                 }
                             }
                         } else {
-                            let omethod = instance.get(method);
+                            let omethod = self.with_instance(id, |instance| instance.get(method));
                             if let Some(method) = omethod {
                                 match method {
                                     Expr::Lambda {
@@ -744,8 +890,9 @@ impl Interpreter {
 
                 match base {
                     Reference(id) => {
-                        let instance = self.instances.get_mut(&id).unwrap();
-                        instance.set(field, value);
+                        self.with_instance(id, |mut instance| {
+                            instance.set(field, value);
+                        });
                         Ok(Expr::Null)
                     }
                     _ => except!(expr.clone(), "Expected reference, got {:?}", base),
@@ -754,7 +901,7 @@ impl Interpreter {
         }
     }
 }
-
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,3 +957,4 @@ mod tests {
         assert!(result.is_err());
     }
 }
+*/

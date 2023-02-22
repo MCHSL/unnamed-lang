@@ -97,11 +97,11 @@ impl Socket {
 }
 
 impl StructInterface for Socket {
-    fn get(&self, name: &str) -> Option<Expr> {
+    fn get(&self, _name: &str) -> Option<Expr> {
         None
     }
 
-    fn set(&mut self, name: &str, value: Expr) {}
+    fn set(&mut self, _name: &str, _value: Expr) {}
 
     fn get_method(&self, name: &str) -> Option<crate::interpreter::MethodType> {
         match name {
@@ -175,9 +175,7 @@ impl StructInterface for Socket {
                 match result {
                     Ok(socket) => {
                         let socket = Box::new(socket);
-                        let id = interpreter.next_id;
-                        interpreter.next_id += 1;
-                        interpreter.instances.insert(id, socket);
+                        let id = interpreter.add_instance(socket);
                         Ok(Expr::Reference(id))
                     }
                     Err(e) => Err(Exception::new(e)),

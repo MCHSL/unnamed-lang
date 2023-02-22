@@ -148,10 +148,10 @@ impl Display for Expr {
                 write!(f, "}}")
             }
             Expr::Null => write!(f, "null"),
-            Expr::Number(n) => write!(f, "{}", n),
-            Expr::Str(s) => write!(f, "{}", s),
-            Expr::Bool(b) => write!(f, "{}", b),
-            Expr::Ident(s) => write!(f, "{}", s),
+            Expr::Number(n) => write!(f, "{n}"),
+            Expr::Str(s) => write!(f, "{s}"),
+            Expr::Bool(b) => write!(f, "{b}"),
+            Expr::Ident(s) => write!(f, "{s}"),
             Expr::List(exprs) => {
                 write!(f, "[")?;
                 for expr in exprs {
@@ -180,11 +180,11 @@ impl Display for Expr {
             } => {
                 write!(f, "fn(")?;
                 for arg in arg_names {
-                    write!(f, "{}, ", arg)?;
+                    write!(f, "{arg}, ")?;
                 }
                 write!(f, ") {}", body.0)
             }
-            Expr::NativeFunction { name, .. } => write!(f, "fn {}", name),
+            Expr::NativeFunction { name, .. } => write!(f, "fn {name}"),
             Expr::If {
                 condition,
                 then_branch,
@@ -219,22 +219,22 @@ impl Display for Expr {
                 fields,
                 methods,
             } => {
-                write!(f, "struct {} {{", name)?;
+                write!(f, "struct {name} {{")?;
                 for (name, value) in fields {
                     write!(f, "{}: {}, ", name, value.0)?;
                 }
                 for (name, args, body) in methods {
-                    write!(f, "fn {}(", name)?;
+                    write!(f, "fn {name}(")?;
                     for arg in args {
-                        write!(f, "{}, ", arg)?;
+                        write!(f, "{arg}, ")?;
                     }
                     write!(f, ") {}", body.0)?;
                 }
                 write!(f, "}}")
             }
-            Expr::Reference(id) => write!(f, "ref({})", id),
+            Expr::Reference(id) => write!(f, "ref({id})"),
             Expr::New { name, args } => {
-                write!(f, "{} {{", name)?;
+                write!(f, "{name} {{")?;
                 for (name, value) in args {
                     write!(f, "{}: {}, ", name, value.0)?;
                 }

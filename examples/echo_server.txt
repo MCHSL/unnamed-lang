@@ -1,0 +1,13 @@
+let server = new Socket {}
+
+server.listen("127.0.0.1", 1234)
+
+while true {
+	let client = server.accept()
+	spawn(|| {
+		while true {
+			let data = client.recv(1024)
+			client.send(data)
+		}
+	})
+}

@@ -1,6 +1,7 @@
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use chumsky::{error::SimpleReason, prelude::*, Stream};
 
+//mod async_interpreter;
 mod common;
 mod exception;
 mod exprs;
@@ -9,6 +10,7 @@ mod lexer;
 mod parser;
 mod socket;
 mod structs;
+mod thread;
 mod token;
 
 use lexer::lexer;
@@ -129,10 +131,10 @@ fn main() {
         }
     };
 
-    let mut interpreter = interpreter::Interpreter::new();
+    let mut funker = interpreter::MetaInterpreter::new();
 
-    let result = interpreter.eval(&result);
-    match result {
+    let result = funker.spawn(result);
+    match result.join().unwrap() {
         Ok(o) => {
             println!("{o:?}");
         }

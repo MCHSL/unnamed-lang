@@ -53,6 +53,7 @@ pub enum Token {
     Catch,
     New,
     Fn,
+    In,
 }
 
 impl std::hash::Hash for Token {
@@ -110,6 +111,7 @@ impl std::fmt::Display for Token {
             Token::Pipe => write!(f, "|"),
             Token::Colon => write!(f, ":"),
             Token::Fn => write!(f, "fn"),
+            Token::In => write!(f, "in"),
         }
     }
 }

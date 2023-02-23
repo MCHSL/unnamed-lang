@@ -79,6 +79,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         text::keyword("catch").map(|_| Token::Catch),
         text::keyword("new").map(|_| Token::New),
         text::keyword("fn").map(|_| Token::Fn),
+        text::keyword("in").map(|_| Token::In),
     ))
     .map_with_span(|t, s| (t, s))
     .labelled("keyword");

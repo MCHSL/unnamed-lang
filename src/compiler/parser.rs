@@ -122,6 +122,25 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     )
                 });
 
+            let for_ = just(Token::For)
+                .map_with_span(|_, span: Span| ((), span))
+                .then(ident)
+                .then_ignore(just(Token::In))
+                .then(expr.clone())
+                .then(block.clone())
+                .map_with_span(
+                    |(((((), for_span), (name, _name_span)), iterable), body), body_span: Span| {
+                        (
+                            Expr::For {
+                                iteration_variable: name.ident_string(),
+                                iterated_expression: Box::new(iterable),
+                                body: Box::new(body),
+                            },
+                            for_span.start()..body_span.end(),
+                        )
+                    },
+                );
+
             let init_field_assignment = ident
                 .then_ignore(just(Token::Colon))
                 .then(expr.clone())
@@ -203,11 +222,24 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     )
                 });
 
+            let list_init = just(Token::LeftBracket)
+                .map_with_span(|_, span: Span| ((), span))
+                .then(expr.clone().separated_by(just(Token::Comma)))
+                .then_ignore(just(Token::RightBracket))
+                .map_with_span(|(((), start_span), items), end_span: Span| {
+                    (
+                        Expr::ListInitializer { items },
+                        start_span.start()..end_span.end(),
+                    )
+                });
+
             let atom = choice((
                 literal,
+                list_init,
                 paren_expression,
                 if_,
                 while_,
+                for_,
                 lambda,
                 new,
                 field_assignment,

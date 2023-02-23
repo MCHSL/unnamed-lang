@@ -10,9 +10,10 @@ use std::{
 use crate::{
     compiler::{common::Spanned, exprs::Expr},
     except,
-    interpreter::structs::{StructDef, StructInstance},
+    interpreter::structs::{StructBuilder, StructDef, StructInstance},
     native_structs::{
         exception::{Exception, ExceptionBuilder, IResult},
+        list::ListBuilder,
         socket::SocketBuilder,
         thread::ThreadHandle,
     },
@@ -343,7 +344,6 @@ impl Interpreter {
 
     fn create_scope(&mut self, locals: HashMap<String, Expr>) {
         let scope = Scope::new(locals);
-        //scope.extend_with(self.scopes.last().unwrap());
         self.scopes.push(scope);
     }
 
@@ -394,13 +394,23 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null
-            | Bool(_)
-            | Number(_)
-            | Str(_)
-            | List(_)
-            | Reference(_)
-            | NativeFunction { .. } => Ok(expr.0.clone()),
+            Null | Bool(_) | Number(_) | Str(_) | Reference(_) | NativeFunction { .. } => {
+                Ok(expr.0.clone())
+            }
+
+            // Lists are a special kind of literal that creates a new object
+            ListInitializer { items } => {
+                let items: Result<Vec<Expr>, Exception> =
+                    items.iter().map(|e| self.eval(e)).collect();
+                let items = items? // unfortunately arguments must be named and I'm too lazy to change that
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, e)| (i.to_string(), e))
+                    .collect();
+                let list = (ListBuilder {}).construct(items)?;
+                let id = self.add_instance(list);
+                Ok(Reference(id))
+            }
 
             Lambda {
                 arg_names: args,
@@ -578,11 +588,21 @@ impl Interpreter {
 
                 let mut result = Expr::Null;
                 match iterated_expression {
-                    Expr::List(list) => {
-                        for item in list.iter() {
-                            let mut scope = HashMap::new();
-                            scope.insert(iteration_variable.clone(), self.eval(item)?);
-                            result = self.eval_block(body, scope)?;
+                    Reference(id) => {
+                        let iterated_expression =
+                            self.with_instance(id, |instance| instance.iter());
+                        let mut iterated_expression = match iterated_expression {
+                            Some(i) => i,
+                            None => {
+                                return except!(expr.clone(), "Cannot iterate over {:?}", expr.0)
+                            }
+                        };
+
+                        let mut iter_locals = HashMap::new();
+
+                        while let Some(e) = iterated_expression.next(self) {
+                            iter_locals.insert(iteration_variable.clone(), e);
+                            result = self.eval_block(body, iter_locals.clone())?;
                         }
                         Ok(result)
                     }

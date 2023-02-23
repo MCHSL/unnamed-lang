@@ -8,7 +8,7 @@ use crate::{
     native_structs::exception::Exception,
 };
 
-use super::method_type::MethodType;
+use super::{method_type::MethodType, Interpreter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
@@ -55,6 +55,9 @@ pub trait StructInterface: Downcast + Send + Sync {
     }
     fn set(&mut self, _name: &str, _value: Expr) {}
     fn get_method(&self, name: &str) -> Option<MethodType>;
+    fn iter(&self) -> Option<Box<dyn Iterable>> {
+        None
+    }
 }
 
 impl_downcast!(StructInterface);
@@ -78,3 +81,7 @@ pub trait StructBuilder: DynClone {
 }
 
 clone_trait_object!(StructBuilder);
+
+pub trait Iterable {
+    fn next(&mut self, interpreter: &mut Interpreter) -> Option<Expr>;
+}

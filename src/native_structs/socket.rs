@@ -13,7 +13,7 @@ use crate::{
 
 use super::exception::Exception;
 
-struct Socket {
+pub struct Socket {
     stream: Option<TcpStream>,
     listener: Option<TcpListener>,
 }
@@ -194,4 +194,8 @@ impl StructBuilder for SocketBuilder {
     fn construct(&self, _args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
         Ok(Box::new(Socket::new()))
     }
+}
+
+pub struct SocketAcceptIterator {
+    socket: Socket,
 }

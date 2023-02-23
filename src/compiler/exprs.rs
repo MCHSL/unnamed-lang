@@ -15,7 +15,6 @@ pub enum Expr {
     Str(String),
     Bool(bool),
     Ident(String),
-    List(Vec<Spanned<Self>>),
 
     // Math operations
     Add(BExpr, BExpr),
@@ -116,6 +115,11 @@ pub enum Expr {
         field: String,
         value: BExpr,
     },
+
+    // List
+    ListInitializer {
+        items: Vec<Spanned<Self>>,
+    },
 }
 
 type BExpr = Box<Spanned<Expr>>;
@@ -154,13 +158,6 @@ impl Display for Expr {
             Expr::Str(s) => write!(f, "{s}"),
             Expr::Bool(b) => write!(f, "{b}"),
             Expr::Ident(s) => write!(f, "{s}"),
-            Expr::List(exprs) => {
-                write!(f, "[")?;
-                for expr in exprs {
-                    write!(f, "{}", expr.0)?;
-                }
-                write!(f, "]")
-            }
             Expr::Add(l, r) => write!(f, "({} + {})", l.0, r.0),
             Expr::Sub(l, r) => write!(f, "({} - {})", l.0, r.0),
             Expr::Mul(l, r) => write!(f, "({} * {})", l.0, r.0),
@@ -252,6 +249,13 @@ impl Display for Expr {
             }
             Expr::FieldAssignment { base, field, value } => {
                 write!(f, "{}.{} = {};", base.0, field, value.0)
+            }
+            Expr::ListInitializer { items } => {
+                write!(f, "[")?;
+                for expr in items {
+                    write!(f, "{}, ", expr.0)?;
+                }
+                write!(f, "]")
             }
         }
     }

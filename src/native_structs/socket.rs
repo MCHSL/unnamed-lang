@@ -7,7 +7,8 @@ use crate::{
     compiler::exprs::Expr,
     interpreter::{
         method_type::MethodType,
-        structs::{StructBuilder, StructInterface},
+        structs::{Iterable, StructBuilder, StructInterface},
+        Interpreter,
     },
 };
 
@@ -183,6 +184,17 @@ impl StructInterface for Socket {
                     Err(e) => Err(Exception::new(e)),
                 }
             })),
+            "accept_many" => Some(MethodType::Native(|interpreter, _args| {
+                let proxy =
+                    Box::new(
+                        interpreter.with_this(|this: &mut Self| SocketAcceptIteratorProxy {
+                            socket: this.listener.as_ref().unwrap().try_clone().unwrap(),
+                        }),
+                    );
+
+                let id = interpreter.add_instance(proxy);
+                Ok(Expr::Reference(id))
+            })),
             _ => None,
         }
     }
@@ -196,6 +208,38 @@ impl StructBuilder for SocketBuilder {
     }
 }
 
+pub struct SocketAcceptIteratorProxy {
+    socket: TcpListener,
+}
+
+impl StructInterface for SocketAcceptIteratorProxy {
+    fn iter(&self) -> Option<Box<dyn Iterable>> {
+        Some(Box::new(SocketAcceptIterator {
+            socket: self.socket.try_clone().unwrap(),
+        }))
+    }
+
+    fn get_method(&self, _name: &str) -> Option<MethodType> {
+        None
+    }
+}
+
 pub struct SocketAcceptIterator {
-    socket: Socket,
+    socket: TcpListener,
+}
+
+impl Iterable for SocketAcceptIterator {
+    fn next(&mut self, interpreter: &mut Interpreter) -> Option<Expr> {
+        match self.socket.accept() {
+            Ok(socket) => {
+                let socket = Box::new(Socket {
+                    stream: Some(socket.0),
+                    listener: None,
+                });
+                let id = interpreter.add_instance(socket);
+                Some(Expr::Reference(id))
+            }
+            Err(e) => panic!("Fix this later: {}", e),
+        }
+    }
 }

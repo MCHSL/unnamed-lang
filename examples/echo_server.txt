@@ -2,8 +2,7 @@ let server = new Socket {}
 
 server.listen("127.0.0.1", 1234)
 
-while true {
-	let client = server.accept()
+for client in server.accept_many() {
 	spawn(|| {
 		while true {
 			let data = client.recv(1024)

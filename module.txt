@@ -1,0 +1,13 @@
+let foo = 5
+
+let bar = || {
+	str(foo)
+}
+
+struct Quux {
+	yoinky,
+
+	fn sploinky() {
+		"yeet " + str(self.yoinky)
+	}
+}

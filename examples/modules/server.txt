@@ -1,0 +1,22 @@
+struct _SocketServer {
+	socket,
+	on_client,
+
+	fn run(ip, port) {
+		self.socket.listen(ip, port)
+		for client in self.socket.accept_many() {
+			spawn(self.on_client)
+		}
+	}
+
+	fn set_on_client(callback) {
+		self.on_client = callback
+	}
+}
+
+let new_server = || {
+	new _SocketServer {
+		socket: new Socket {}
+		on_client: |c| null
+	}
+}

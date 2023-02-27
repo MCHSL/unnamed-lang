@@ -50,6 +50,9 @@ pub struct StructInstance {
 }
 
 pub trait StructInterface: Downcast + Send + Sync {
+    fn type_name(&self) -> String {
+        std::any::type_name::<Self>().to_owned()
+    }
     fn get(&self, _name: &str) -> Option<Expr> {
         None
     }
@@ -63,6 +66,10 @@ pub trait StructInterface: Downcast + Send + Sync {
 impl_downcast!(StructInterface);
 
 impl StructInterface for StructInstance {
+    fn type_name(&self) -> String {
+        self.name.clone()
+    }
+
     fn get(&self, name: &str) -> Option<Expr> {
         self.fields.get(name).cloned()
     }
@@ -76,7 +83,7 @@ impl StructInterface for StructInstance {
     }
 }
 
-pub trait StructBuilder: DynClone {
+pub trait StructBuilder: DynClone + Send + Sync {
     fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception>;
 }
 

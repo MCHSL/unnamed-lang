@@ -2,6 +2,11 @@ use std::collections::HashMap;
 
 use chumsky::prelude::*;
 
+use crate::interpreter::{
+    method_type::MethodType,
+    structs::{StructDef, StructDefKind},
+};
+
 use super::{
     common::{Span, Spanned},
     exprs::Expr,
@@ -151,26 +156,24 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
 
             let new = just(Token::New)
                 .map_with_span(|_, span: Span| ((), span))
-                .then(ident)
+                .then(expr.clone())
                 .then_ignore(just(Token::LeftBrace))
                 .then(init_field_assignment.repeated())
                 .then_ignore(just(Token::RightBrace))
-                .map_with_span(
-                    |(((_, new_span), (name, _name_span)), fields), fields_span: Span| {
-                        let field_map = fields
-                            .into_iter()
-                            .map(|((name, value), _span)| (name, value))
-                            .collect();
+                .map_with_span(|(((_, new_span), name), fields), fields_span: Span| {
+                    let field_map = fields
+                        .into_iter()
+                        .map(|((name, value), _span)| (name, value))
+                        .collect();
 
-                        (
-                            Expr::New {
-                                name: name.ident_string(),
-                                args: field_map,
-                            },
-                            new_span.start()..fields_span.end(),
-                        )
-                    },
-                );
+                    (
+                        Expr::New {
+                            def: Box::new(name),
+                            args: field_map,
+                        },
+                        new_span.start()..fields_span.end(),
+                    )
+                });
 
             let access_chain =
                 just(Token::Dot).ignore_then(ident.then(argument_list.clone().or_not()));
@@ -435,18 +438,20 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                         .map(|(((name, _name_span), (args, _args_span)), body)| {
                             (
                                 name.ident_string(),
-                                args.into_iter().map(|a| a.0.ident_string()).collect(),
-                                body,
+                                MethodType::UserDefined {
+                                    args: args.into_iter().map(|a| a.0.ident_string()).collect(),
+                                    body,
+                                },
                             )
                         })
                         .collect();
 
                     (
-                        Expr::StructDefinition {
+                        Expr::StructDefinitionStatement(StructDef {
                             name: name.ident_string(),
                             fields: field_map,
                             methods: method_map,
-                        },
+                        }),
                         struct_span.start()..struct_span.end(),
                     )
                 },

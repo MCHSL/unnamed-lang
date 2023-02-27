@@ -1,8 +1,21 @@
 use std::{collections::HashMap, fmt::Display};
 
-use crate::interpreter::method_type::NativeFunc;
+use crate::interpreter::{
+    method_type::{MethodType, NativeFunc},
+    structs::{StructDef, StructDefKind},
+};
 
 use super::common::Spanned;
+
+pub enum CallableKind {
+    Lambda {
+        arg_names: Vec<String>,
+        body: Vec<Spanned<Expr>>,
+        environment: HashMap<String, Expr>,
+    },
+
+    Method(MethodType),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -83,19 +96,17 @@ pub enum Expr {
         value: BExpr,
     },
 
-    // Structs
-    StructDefinition {
-        name: String,
-        fields: Vec<(String, Spanned<Expr>)>,
-        methods: Vec<(String, Vec<String>, Spanned<Expr>)>,
-    },
+    // Struct definition in soft code
+    StructDefinitionStatement(StructDef),
+    // Struct definition produced when evaluating the above or native structs
+    StructDefinition(StructDefKind),
 
     // Instance of a struct
     Reference(usize),
 
     // New instance
     New {
-        name: String,
+        def: BExpr,
         args: Vec<(String, Spanned<Expr>)>,
     },
 
@@ -213,27 +224,15 @@ impl Display for Expr {
                 write!(f, ")")
             }
             Expr::Assign { name, value } => write!(f, "{} = {};", name, value.0),
-            Expr::StructDefinition {
-                name,
-                fields,
-                methods,
-            } => {
-                write!(f, "struct {name} {{")?;
-                for (name, value) in fields {
-                    write!(f, "{}: {}, ", name, value.0)?;
-                }
-                for (name, args, body) in methods {
-                    write!(f, "fn {name}(")?;
-                    for arg in args {
-                        write!(f, "{arg}, ")?;
-                    }
-                    write!(f, ") {}", body.0)?;
-                }
-                write!(f, "}}")
+            Expr::StructDefinitionStatement(def) => {
+                write!(f, "struct def")
+            }
+            Expr::StructDefinition(kind) => {
+                write!(f, "yeet yeet")
             }
             Expr::Reference(id) => write!(f, "ref({id})"),
-            Expr::New { name, args } => {
-                write!(f, "{name} {{")?;
+            Expr::New { def: name, args } => {
+                write!(f, "{} {{", name.0)?;
                 for (name, value) in args {
                     write!(f, "{}: {}, ", name, value.0)?;
                 }

@@ -1,8 +1,7 @@
-let l = [1, 2, 3]
-l.push(4)
-print("There are " + str(l.len()) + " elements in the list")
+let mod = import("module.txt")
 
-for x in l {
-	print(x)
-	x
+let q = new mod.Quux {
+	yoinky: 1
 }
+
+q.sploinky()

@@ -7,13 +7,17 @@ use std::{
     thread::JoinHandle,
 };
 
+use chumsky::prelude::*;
+use chumsky::Stream;
+
 use crate::{
-    compiler::{common::Spanned, exprs::Expr},
+    compiler::{common::Spanned, exprs::Expr, lexer::lexer, parser::parser},
     except,
     interpreter::structs::{StructBuilder, StructDef, StructInstance},
     native_structs::{
         exception::{Exception, ExceptionBuilder, IResult},
         list::ListBuilder,
+        module::Module,
         socket::SocketBuilder,
         thread::ThreadHandle,
     },
@@ -78,34 +82,6 @@ impl MetaInterpreter {
             interpreter.eval_block(&block, HashMap::new())
         })
     }
-
-    // pub fn get_instance(
-    //     &self,
-    //     id: usize,
-    // ) -> RwLockReadGuard<'_, Option<&Box<dyn StructInterface>>> {
-    //     self.instances.read().unwrap().get(&id)
-    // }
-
-    // pub fn get_instance_mut(&mut self, id: usize) -> Option<&mut Box<dyn StructInterface>> {
-    //     self.instances.write().unwrap().get_mut(&id)
-    // }
-
-    // pub fn with_instance<U>(
-    //     &mut self,
-    //     id: usize,
-    //     f: impl FnOnce(&mut Box<dyn StructInterface>) -> U,
-    // ) -> U {
-    //     let mut instances = self.instances.write().unwrap();
-    //     let instance = instances.get_mut(&id).unwrap();
-    //     f(instance)
-    // }
-
-    // pub fn get_next_id(&mut self) -> usize {
-    //     let mut next_id = self.next_id.write().unwrap();
-    //     let id = *next_id;
-    //     *next_id += 1;
-    //     id
-    // }
 }
 
 impl Interpreter {
@@ -122,16 +98,21 @@ impl Interpreter {
         this
     }
 
-    // pub fn get_instance(
-    //     &self,
-    //     id: usize,
-    // ) -> RwLockReadGuard<'_, Option<&Box<dyn StructInterface>>> {
-    //     self.instances.read().unwrap().get(&id)
-    // }
+    pub fn empty() -> Self {
+        let instances = Arc::new(RwLock::new(HashMap::new()));
+        let next_id = Arc::new(AtomicUsize::new(0));
 
-    // pub fn get_instance_mut(&mut self, id: usize) -> Option<&mut Box<dyn StructInterface>> {
-    //     self.instances.write().unwrap().get_mut(&id)
-    // }
+        let mut this = Self {
+            scopes: vec![Scope::new_empty()],
+            instances,
+            next_id,
+            this: None,
+        };
+
+        this.add_standard_library();
+
+        this
+    }
 
     pub fn with_instance<U>(
         &mut self,
@@ -255,6 +236,10 @@ impl Interpreter {
             }
             let arg = args[0].clone();
 
+            if !matches!(arg, Expr::Lambda { .. }) {
+                return Err(Exception::new("spawn() takes a lambda"));
+            }
+
             let instances = interpreter.instances.clone();
             let next_id = interpreter.next_id.clone();
             let environment = interpreter.clone_environment();
@@ -266,6 +251,59 @@ impl Interpreter {
             let thread = Box::new(ThreadHandle::new(thread));
             let id = interpreter.add_instance(thread);
             Ok(Expr::Reference(id))
+        });
+
+        self.add_native_function("import", |interpreter, args| {
+            if args.len() != 1 {
+                return Err(Exception::new("import() takes exactly one argument"));
+            }
+
+            let filename = args[0].clone();
+            let filename = match filename {
+                Expr::Str(s) => s,
+                _ => return Err(Exception::new("expected string")),
+            };
+
+            let content = std::fs::read_to_string(filename.clone()).unwrap();
+            let lexed_content = lexer().parse(content.clone()).unwrap();
+
+            let len = content.chars().count();
+            let (result, errors) =
+                parser().parse_recovery(Stream::from_iter(len..len + 1, lexed_content.into_iter()));
+
+            println!("Import errors: {errors:?}");
+
+            let result = result.unwrap();
+
+            let instances = interpreter.instances.clone();
+            let next_id = interpreter.next_id.clone();
+
+            let mut importer = Interpreter::new(instances, next_id);
+
+            importer.eval_block_preserving_scope(&result, HashMap::new())?;
+
+            let global_scope = importer.scopes.remove(1);
+
+            let locals = global_scope.locals;
+
+            let module = Module::new(filename, locals);
+
+            let id = interpreter.add_instance(Box::new(module));
+
+            Ok(Expr::Reference(id))
+        });
+
+        self.add_native_function("type", |interpreter, args| {
+            if args.len() != 1 {
+                return Err(Exception::new("type() takes exactly one argument"));
+            }
+
+            let name = match args[0] {
+                Expr::Reference(id) => interpreter.with_instance(id, |inst| inst.type_name()),
+                _ => "Heck".to_owned(),
+            };
+
+            Ok(Expr::Str(name))
         });
 
         self.add_native_struct(
@@ -364,13 +402,14 @@ impl Interpreter {
 
     pub fn add_native_struct<S: AsRef<str>>(&mut self, name: S, struct_def: StructDefKind) {
         let name = name.as_ref().to_owned();
-        self.add_struct(name, struct_def);
+        self.set_new(name, Expr::StructDefinition(struct_def));
     }
 
-    pub fn eval_block(
+    fn eval_block_inner(
         &mut self,
         block: &Spanned<Expr>,
         locals: HashMap<String, Expr>,
+        preserve_scope: bool,
     ) -> IResult<Expr> {
         let block = match &block.0 {
             Expr::Block(exprs) => exprs,
@@ -382,9 +421,27 @@ impl Interpreter {
         for expr in block {
             result = self.eval(expr)?;
         }
-        self.remove_scope();
+        if !preserve_scope {
+            self.remove_scope();
+        }
 
         Ok(result)
+    }
+
+    pub fn eval_block(
+        &mut self,
+        block: &Spanned<Expr>,
+        locals: HashMap<String, Expr>,
+    ) -> IResult<Expr> {
+        self.eval_block_inner(block, locals, false)
+    }
+
+    pub fn eval_block_preserving_scope(
+        &mut self,
+        block: &Spanned<Expr>,
+        locals: HashMap<String, Expr>,
+    ) -> IResult<Expr> {
+        self.eval_block_inner(block, locals, true)
     }
 
     pub fn eval(&mut self, expr: &Spanned<Expr>) -> IResult<Expr> {
@@ -651,12 +708,8 @@ impl Interpreter {
             }
 
             // Struct definition
-            StructDefinition {
-                name,
-                fields,
-                methods,
-            } => {
-                let field_map = HashMap::from_iter(fields.iter().map(Clone::clone));
+            StructDefinitionStatement(def) => {
+                /*let field_map = HashMap::from_iter(fields.iter().map(Clone::clone));
                 let mut method_map = HashMap::new();
                 for (name, args, body) in methods.iter().cloned() {
                     let method = MethodType::UserDefined { args, body };
@@ -671,11 +724,18 @@ impl Interpreter {
                         methods: method_map,
                     }),
                 );
+                Ok(Expr::Null)*/
+
+                self.set_new(
+                    def.name.clone(),
+                    Expr::StructDefinition(StructDefKind::UserDefined(def.clone())),
+                );
                 Ok(Expr::Null)
             }
+            StructDefinition(_) => Ok(expr.0.clone()),
 
             // Struct instantiation
-            New { name, args } => {
+            New { def, args } => {
                 let args: Vec<(String, Result<_, _>)> = args
                     .iter()
                     .map(|(name, value)| (name.clone(), self.eval(value)))
@@ -686,11 +746,19 @@ impl Interpreter {
                     .collect();
                 let args = args?;
 
-                let struct_def = self.get_struct(name).cloned();
-                if struct_def.is_none() {
-                    return except!(expr.clone(), "Undefined struct {}", name);
+                let struct_def = self.eval(def)?;
+                let struct_def = match struct_def {
+                    StructDefinition(sd) => sd,
+                    _ => {
+                        return except!(expr.clone(), "{:?} is not a struct definition", struct_def)
+                    }
                 };
-                let struct_def = struct_def.unwrap();
+
+                // let struct_def = self.get_struct(name).cloned();
+                // if struct_def.is_none() {
+                //     return except!(expr.clone(), "Undefined struct {}", name);
+                // };
+                // let struct_def = struct_def.unwrap();
 
                 let instance = match struct_def {
                     StructDefKind::UserDefined(struct_def) => {
@@ -708,7 +776,7 @@ impl Interpreter {
                         }
 
                         Box::new(StructInstance {
-                            name: name.clone(),
+                            name: "boink".to_owned(),
                             fields,
                             methods,
                         })

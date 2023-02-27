@@ -83,6 +83,7 @@ fn show_parser_errors(input: &str, errors: Vec<Simple<Token>>) {
 }
 
 fn show_interpreter_error(input: &str, error: Exception) {
+    println!("{:?}", error);
     let mut colors = ColorGenerator::new();
 
     let a = colors.next();

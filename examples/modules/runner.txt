@@ -1,0 +1,12 @@
+let servers = import("./examples/modules/server.txt")
+
+let on_client = |client| {
+	while true {
+		let data = client.recv(1024)
+		client.send(data)
+	}
+}
+
+let server = servers.new_server()
+server.set_on_client(on_client)
+server.run("127.0.0.1", 1234)

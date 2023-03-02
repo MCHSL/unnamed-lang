@@ -4,7 +4,10 @@ use downcast_rs::{impl_downcast, Downcast};
 use dyn_clone::{clone_trait_object, DynClone};
 
 use crate::{
-    compiler::{common::Spanned, exprs::Expr},
+    compiler::{
+        common::Spanned,
+        exprs::{CallableKind, Expr},
+    },
     native_structs::exception::Exception,
 };
 
@@ -15,11 +18,13 @@ pub struct StructDef {
     pub name: String,
     pub fields: HashMap<String, Spanned<Expr>>,
     pub methods: HashMap<String, MethodType>,
+    pub static_methods: HashMap<String, MethodType>,
+    pub defined_in: usize,
 }
 
 #[derive(Clone)]
 pub enum StructDefKind {
-    Native(Box<dyn StructBuilder>),
+    Native(Box<dyn StructDefinitionInterface>),
     UserDefined(StructDef),
 }
 
@@ -49,7 +54,7 @@ pub struct StructInstance {
     pub methods: HashMap<String, MethodType>,
 }
 
-pub trait StructInterface: Downcast + Send + Sync {
+pub trait StructInterface: Downcast + Send + Sync + std::fmt::Debug {
     fn type_name(&self) -> String {
         std::any::type_name::<Self>().to_owned()
     }
@@ -57,7 +62,6 @@ pub trait StructInterface: Downcast + Send + Sync {
         None
     }
     fn set(&mut self, _name: &str, _value: Expr) {}
-    fn get_method(&self, name: &str) -> Option<MethodType>;
     fn iter(&self) -> Option<Box<dyn Iterable>> {
         None
     }
@@ -71,23 +75,41 @@ impl StructInterface for StructInstance {
     }
 
     fn get(&self, name: &str) -> Option<Expr> {
-        self.fields.get(name).cloned()
+        let val = self.fields.get(name).cloned();
+        if val.is_some() {
+            return val;
+        }
+
+        if let Some(meth) = self.methods.get(name).cloned() {
+            Some(Expr::Callable(CallableKind::Method(Box::new(meth))))
+        } else {
+            None
+        }
     }
 
     fn set(&mut self, name: &str, value: Expr) {
         self.fields.insert(name.to_owned(), value);
     }
+}
 
-    fn get_method(&self, name: &str) -> Option<MethodType> {
-        self.methods.get(name).cloned()
+pub trait StructDefinitionInterface: DynClone + Send + Sync {
+    fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception>;
+    fn get_static_method(&self, name: &str) -> Option<MethodType> {
+        None
     }
 }
 
-pub trait StructBuilder: DynClone + Send + Sync {
-    fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception>;
-}
+clone_trait_object!(StructDefinitionInterface);
 
-clone_trait_object!(StructBuilder);
+impl StructDefinitionInterface for StructDef {
+    fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
+        todo!()
+    }
+
+    fn get_static_method(&self, name: &str) -> Option<MethodType> {
+        self.static_methods.get(name).cloned()
+    }
+}
 
 pub trait Iterable {
     fn next(&mut self, interpreter: &mut Interpreter) -> Option<Expr>;

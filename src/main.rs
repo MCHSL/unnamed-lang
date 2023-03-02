@@ -109,7 +109,7 @@ fn main() {
         Ok(t) => {
             let len = input.chars().count();
             let (result, errors) =
-                parser().parse_recovery(Stream::from_iter(len..len + 1, t.into_iter()));
+                parser(0).parse_recovery(Stream::from_iter(len..len + 1, t.into_iter()));
             if errors.is_empty() {
                 result.unwrap()
             } else {

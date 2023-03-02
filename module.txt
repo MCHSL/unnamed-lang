@@ -1,13 +1,9 @@
-let foo = 5
+struct Foo {
+	fn new() {
+		make Foo {}
+	}
 
-let bar = || {
-	str(foo)
-}
-
-struct Quux {
-	yoinky,
-
-	fn sploinky() {
-		"yeet " + str(self.yoinky)
+	fn fuck(self, name) {
+		print("FUCK YOU " + name + " HAHAHAHAHAHAHAHAHAH")
 	}
 }

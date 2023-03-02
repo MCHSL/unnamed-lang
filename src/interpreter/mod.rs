@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::Range,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, RwLock, RwLockWriteGuard,
@@ -11,9 +12,14 @@ use chumsky::prelude::*;
 use chumsky::Stream;
 
 use crate::{
-    compiler::{common::Spanned, exprs::Expr, lexer::lexer, parser::parser},
+    compiler::{
+        common::Spanned,
+        exprs::{CallableKind, Expr},
+        lexer::lexer,
+        parser::parser,
+    },
     except,
-    interpreter::structs::{StructBuilder, StructDef, StructInstance},
+    interpreter::structs::{StructDef, StructDefinitionInterface, StructInstance},
     native_structs::{
         exception::{Exception, ExceptionBuilder, IResult},
         list::ListBuilder,
@@ -35,6 +41,7 @@ pub mod structs;
 
 pub type InstanceMap = Arc<RwLock<HashMap<usize, Arc<RwLock<Box<dyn StructInterface>>>>>>;
 
+#[derive(Debug)]
 pub struct Interpreter {
     scopes: Vec<Scope>,
     pub instances: InstanceMap,
@@ -70,7 +77,7 @@ impl MetaInterpreter {
 
         Self {
             instances,
-            next_id: Arc::new(AtomicUsize::new(0)),
+            next_id: Arc::new(AtomicUsize::new(1)),
         }
     }
 
@@ -172,17 +179,10 @@ impl Interpreter {
                 Expr::Reference(id) => {
                     let method = interpreter.with_instance(id, |instance| {
                         instance
-                            .get_method("__str__")
+                            .get("__str__")
                             .ok_or_else(|| Exception::new("Invalid reference"))
                     })?;
-                    match interpreter.with_set_this(id, |interp| match method {
-                        MethodType::Native(f) => f(interp, vec![]),
-                        MethodType::UserDefined { args: _, body } => {
-                            let mut h = HashMap::new();
-                            h.insert("self".to_owned(), Expr::Reference(id));
-                            interp.eval_block(&body, h)
-                        }
-                    })? {
+                    match interpreter.call_callable((method, 0..0), id, &vec![])? {
                         Expr::Str(s) => s,
                         _ => return Err(Exception::new("Invalid return type from __str__ method")),
                     }
@@ -232,20 +232,18 @@ impl Interpreter {
 
         self.add_native_function("spawn", |interpreter, args| {
             if args.len() != 1 {
-                return Err(Exception::new("spawn() takes exactly one argument"));
+                return Err(Exception::new(
+                    "spawn() takes exactly one callable argument",
+                ));
             }
             let arg = args[0].clone();
-
-            if !matches!(arg, Expr::Lambda { .. }) {
-                return Err(Exception::new("spawn() takes a lambda"));
-            }
 
             let instances = interpreter.instances.clone();
             let next_id = interpreter.next_id.clone();
             let environment = interpreter.clone_environment();
             let thread = std::thread::spawn(move || {
                 let mut interpreter = Self::new(instances, next_id);
-                interpreter.invoke_lambda(&arg, vec![], environment)
+                interpreter.call_callable((arg, 0..0), 0, &vec![])
             });
 
             let thread = Box::new(ThreadHandle::new(thread));
@@ -267,9 +265,11 @@ impl Interpreter {
             let content = std::fs::read_to_string(filename.clone()).unwrap();
             let lexed_content = lexer().parse(content.clone()).unwrap();
 
+            let module_id = interpreter.next_id.load(Ordering::SeqCst);
+
             let len = content.chars().count();
-            let (result, errors) =
-                parser().parse_recovery(Stream::from_iter(len..len + 1, lexed_content.into_iter()));
+            let (result, errors) = parser(module_id)
+                .parse_recovery(Stream::from_iter(len..len + 1, lexed_content.into_iter()));
 
             println!("Import errors: {errors:?}");
 
@@ -282,11 +282,11 @@ impl Interpreter {
 
             importer.eval_block_preserving_scope(&result, HashMap::new())?;
 
-            let global_scope = importer.scopes.remove(1);
+            let global_scope = importer.scopes.get(1).cloned().unwrap();
 
             let locals = global_scope.locals;
 
-            let module = Module::new(filename, locals);
+            let module = Module::new(importer, filename, locals);
 
             let id = interpreter.add_instance(Box::new(module));
 
@@ -314,21 +314,21 @@ impl Interpreter {
         self.add_native_struct("Socket", StructDefKind::Native(Box::new(SocketBuilder {})));
     }
 
-    fn invoke_lambda(
-        &mut self,
-        lambda: &Expr,
-        _args: Vec<Expr>,
-        env: HashMap<String, Expr>,
-    ) -> IResult<Expr> {
-        match lambda {
-            Expr::Lambda {
-                arg_names: _,
-                body,
-                environment: _,
-            } => self.eval_block(body, env),
-            _ => Err(Exception::new("Invalid lambda")),
-        }
-    }
+    // fn invoke_lambda(
+    //     &mut self,
+    //     lambda: &Expr,
+    //     _args: Vec<Expr>,
+    //     env: HashMap<String, Expr>,
+    // ) -> IResult<Expr> {
+    //     match lambda {
+    //         Expr::Lambda {
+    //             arg_names: _,
+    //             body,
+    //             environment: _,
+    //         } => self.eval_block(body, env),
+    //         _ => Err(Exception::new("Invalid lambda")),
+    //     }
+    // }
 
     fn get(&self, name: &str) -> Option<&Expr> {
         for scope in self.scopes.iter().rev() {
@@ -393,10 +393,10 @@ impl Interpreter {
         let name = name.as_ref().to_owned();
         self.set_new(
             name.clone(),
-            Expr::NativeFunction {
+            Expr::Callable(CallableKind::NativeFunction {
                 name,
                 function: NativeFunc(function),
-            },
+            }),
         );
     }
 
@@ -444,6 +444,55 @@ impl Interpreter {
         self.eval_block_inner(block, locals, true)
     }
 
+    fn call_callable(
+        &mut self,
+        callable_expr: Spanned<Expr>,
+        this: usize,
+        args: &Vec<Spanned<Expr>>,
+    ) -> IResult<Expr> {
+        let callable = match callable_expr.0.clone() {
+            Expr::Callable(c) => c,
+            _ => return except!(callable_expr.clone(), "Not callable"),
+        };
+        let args: IResult<Vec<Expr>> = args.iter().map(|a| self.eval(a)).collect();
+        let mut args = args?;
+        match callable {
+            CallableKind::Lambda {
+                arg_names,
+                body,
+                environment,
+            } => {
+                let mut scope = HashMap::new();
+                for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
+                    scope.insert(arg_name.clone(), arg.clone());
+                }
+                scope.extend(environment);
+
+                self.eval_block(&body, scope)
+            }
+
+            CallableKind::NativeFunction { name, function } => {
+                let result = (function.0)(self, args);
+                result.map_err(|e| Exception::new_with_expr(e.message(), callable_expr))
+            }
+
+            CallableKind::Method(m) => match *m {
+                MethodType::UserDefined { arg_names, body } => {
+                    args.insert(0, Expr::Reference(this));
+                    let mut new_vars = HashMap::new();
+                    for (name, val) in arg_names.iter().zip(args.into_iter()) {
+                        new_vars.insert(name.clone(), val);
+                    }
+                    self.eval_block(&body, new_vars)
+                }
+                MethodType::Native(func) => {
+                    let result = self.with_set_this(this, |interp| func(interp, args));
+                    result.map_err(|e| Exception::new_with_expr(e.message(), callable_expr))
+                }
+            },
+        }
+    }
+
     pub fn eval(&mut self, expr: &Spanned<Expr>) -> IResult<Expr> {
         use Expr::*;
         match &expr.0 {
@@ -451,9 +500,22 @@ impl Interpreter {
             Block(_) => self.eval_block(expr, HashMap::new()),
 
             // Literals are evaluated to themselves
-            Null | Bool(_) | Number(_) | Str(_) | Reference(_) | NativeFunction { .. } => {
+            Null | Bool(_) | Number(_) | Str(_) | Reference(_) | StructDefinition(_) => {
                 Ok(expr.0.clone())
             }
+
+            Callable(c) => match c {
+                CallableKind::Lambda {
+                    arg_names,
+                    body,
+                    environment,
+                } => Ok(Expr::Callable(CallableKind::Lambda {
+                    arg_names: arg_names.clone(),
+                    body: body.clone(),
+                    environment: self.clone_environment(),
+                })),
+                _ => Ok(expr.0.clone()),
+            },
 
             // Lists are a special kind of literal that creates a new object
             ListInitializer { items } => {
@@ -467,19 +529,6 @@ impl Interpreter {
                 let list = (ListBuilder {}).construct(items)?;
                 let id = self.add_instance(list);
                 Ok(Reference(id))
-            }
-
-            Lambda {
-                arg_names: args,
-                body,
-                ..
-            } => {
-                let environ = self.clone_environment();
-                Ok(Lambda {
-                    arg_names: args.clone(),
-                    body: body.clone(),
-                    environment: environ,
-                })
             }
 
             // Identifiers
@@ -673,69 +722,26 @@ impl Interpreter {
 
             // Freestanding call
             Call { name, args } => {
-                let name = name.0.ident_string();
-                let args: IResult<Vec<Expr>> = args.0.iter().map(|a| self.eval(a)).collect();
-                let args = args?;
-
-                let function = self.get(&name).cloned();
+                let sname = name.0.ident_string();
+                let function = self.get(&sname).cloned();
                 if function.is_none() {
-                    return except!(expr.clone(), "Undefined variable {}", name);
+                    return except!(expr.clone(), "Undefined variable {}", sname);
                 };
                 let function = function.unwrap();
-                match function {
-                    Expr::Lambda {
-                        arg_names,
-                        body,
-                        environment,
-                    } => {
-                        let mut scope = HashMap::new();
-                        for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
-                            scope.insert(arg_name.clone(), arg.clone());
-                        }
-                        scope.extend(environment);
-
-                        self.eval_block(&body, scope)
-                    }
-                    Expr::NativeFunction {
-                        name: _name,
-                        function,
-                    } => {
-                        let result = (function.0)(self, args);
-                        result.map_err(|e| Exception::new_with_expr(e.message(), expr.clone()))
-                    }
-                    _ => except!(expr.clone(), "Cannot call {:?}", function),
-                }
+                self.call_callable((function, name.1.clone()), 0, &args.0)
             }
 
             // Struct definition
             StructDefinitionStatement(def) => {
-                /*let field_map = HashMap::from_iter(fields.iter().map(Clone::clone));
-                let mut method_map = HashMap::new();
-                for (name, args, body) in methods.iter().cloned() {
-                    let method = MethodType::UserDefined { args, body };
-                    method_map.insert(name, method);
-                }
-
-                self.add_struct(
-                    name.clone(),
-                    StructDefKind::UserDefined(StructDef {
-                        name: name.clone(),
-                        fields: field_map,
-                        methods: method_map,
-                    }),
-                );
-                Ok(Expr::Null)*/
-
                 self.set_new(
                     def.name.clone(),
                     Expr::StructDefinition(StructDefKind::UserDefined(def.clone())),
                 );
                 Ok(Expr::Null)
             }
-            StructDefinition(_) => Ok(expr.0.clone()),
 
             // Struct instantiation
-            New { def, args } => {
+            Make { def, args } => {
                 let args: Vec<(String, Result<_, _>)> = args
                     .iter()
                     .map(|(name, value)| (name.clone(), self.eval(value)))
@@ -753,12 +759,6 @@ impl Interpreter {
                         return except!(expr.clone(), "{:?} is not a struct definition", struct_def)
                     }
                 };
-
-                // let struct_def = self.get_struct(name).cloned();
-                // if struct_def.is_none() {
-                //     return except!(expr.clone(), "Undefined struct {}", name);
-                // };
-                // let struct_def = struct_def.unwrap();
 
                 let instance = match struct_def {
                     StructDefKind::UserDefined(struct_def) => {
@@ -808,63 +808,58 @@ impl Interpreter {
             }
 
             MethodCall { base, method, args } => {
+                let bbase = self.eval(base)?;
+                match bbase {
+                    Reference(id) => {
+                        let omethod = self.with_instance(id, |instance| instance.get(method));
+                        if omethod.is_none() {
+                            return except!(
+                                expr.clone(),
+                                "{} is not a method of {:?}",
+                                method,
+                                base
+                            );
+                        }
+                        let omethod = omethod.unwrap();
+                        self.call_callable((omethod, base.1.clone()), id, &args)
+                    }
+                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
+                }
+            }
+
+            StaticMethodCall { base, method, args } => {
+                println!("{:?}", expr.0);
                 let base = self.eval(base)?;
                 let params: Result<Vec<Expr>, Exception> =
                     args.iter().map(|p| self.eval(p)).collect();
                 let params = params?;
-                match base {
-                    Reference(id) => {
-                        let omethod =
-                            self.with_instance(id, |instance| instance.get_method(method));
 
-                        if let Some(method) = omethod {
-                            match method {
-                                MethodType::Native(func) => {
-                                    let result =
-                                        self.with_set_this(id, |interp| func(interp, params));
-                                    result.map_err(|e| {
-                                        Exception::new_with_expr(e.message(), expr.clone())
-                                    })
-                                }
-                                MethodType::UserDefined { args, body } => {
-                                    let mut new_vars = HashMap::new();
-                                    for (name, val) in args.iter().zip(params.into_iter()) {
-                                        new_vars.insert(name.clone(), val);
-                                    }
-                                    new_vars.insert("self".to_string(), Reference(id));
-                                    self.eval_block(&body, new_vars)
-                                }
-                            }
-                        } else {
-                            let omethod = self.with_instance(id, |instance| instance.get(method));
-                            if let Some(method) = omethod {
-                                match method {
-                                    Expr::Lambda {
-                                        arg_names: args,
-                                        body,
-                                        environment,
-                                    } => {
-                                        let mut new_vars = HashMap::new();
-                                        for (name, val) in args.iter().zip(params.into_iter()) {
-                                            new_vars.insert(name.clone(), val);
-                                        }
-                                        new_vars.extend(environment);
-                                        new_vars.insert("self".to_string(), Reference(id));
-                                        self.eval_block(&body, new_vars)
-                                    }
-                                    _ => except!(
-                                        expr.clone(),
-                                        "Cannot call {:?} on {:?}",
-                                        method,
-                                        base
-                                    ),
-                                }
-                            } else {
-                                except!(expr.clone(), "Undefined method {} on {:?}", method, base)
-                            }
-                        }
+                let def = match base {
+                    Expr::StructDefinition(def) => def,
+                    _ => return except!(expr.clone(), "Can't call static methods on non-def"),
+                };
+
+                let (module, method) = match def {
+                    StructDefKind::UserDefined(ud) => (ud.defined_in, ud.get_static_method(method)),
+                    StructDefKind::Native(n) => {
+                        return except!(expr.clone(), "Can't call static methods on native def")
                     }
-                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
+                };
+
+                let method = method.unwrap();
+
+                match method {
+                    MethodType::UserDefined { arg_names, body } => {
+                        let mut new_vars = HashMap::new();
+                        for (name, val) in arg_names.iter().zip(params.into_iter()) {
+                            new_vars.insert(name.clone(), val);
+                        }
+                        self.with_instance(module, |mut foo| {
+                            let m = foo.downcast_mut::<Module>().unwrap();
+                            m.interpreter.eval_block(&body, new_vars)
+                        })
+                    }
+                    _ => unreachable!(),
                 }
             }
 

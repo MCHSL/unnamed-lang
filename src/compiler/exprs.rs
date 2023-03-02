@@ -7,14 +7,20 @@ use crate::interpreter::{
 
 use super::common::Spanned;
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum CallableKind {
     Lambda {
         arg_names: Vec<String>,
-        body: Vec<Spanned<Expr>>,
+        body: BExpr,
         environment: HashMap<String, Expr>,
     },
 
-    Method(MethodType),
+    Method(Box<MethodType>),
+
+    NativeFunction {
+        name: String,
+        function: NativeFunc,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,16 +65,7 @@ pub enum Expr {
     },
 
     // Functions
-    Lambda {
-        arg_names: Vec<String>,
-        body: BExpr,
-        environment: HashMap<String, Expr>,
-    },
-
-    NativeFunction {
-        name: String,
-        function: NativeFunc,
-    },
+    Callable(CallableKind),
 
     // Control flow
     If {
@@ -87,7 +84,7 @@ pub enum Expr {
     },
     Call {
         name: BExpr,
-        args: Spanned<Vec<BExpr>>,
+        args: Spanned<Vec<Spanned<Expr>>>,
     },
 
     // Variable stuff
@@ -105,7 +102,7 @@ pub enum Expr {
     Reference(usize),
 
     // New instance
-    New {
+    Make {
         def: BExpr,
         args: Vec<(String, Spanned<Expr>)>,
     },
@@ -116,6 +113,12 @@ pub enum Expr {
     },
 
     MethodCall {
+        base: BExpr,
+        method: String,
+        args: Vec<Spanned<Expr>>,
+    },
+
+    StaticMethodCall {
         base: BExpr,
         method: String,
         args: Vec<BExpr>,
@@ -185,16 +188,9 @@ impl Display for Expr {
             Expr::Not(e) => write!(f, "(!{})", e.0),
             Expr::Neg(e) => write!(f, "(-{})", e.0),
             Expr::Let { name, initializer } => write!(f, "let {} = {};", name, initializer.0),
-            Expr::Lambda {
-                arg_names, body, ..
-            } => {
-                write!(f, "fn(")?;
-                for arg in arg_names {
-                    write!(f, "{arg}, ")?;
-                }
-                write!(f, ") {}", body.0)
+            Expr::Callable(c) => {
+                write!(f, "{c:?}")
             }
-            Expr::NativeFunction { name, .. } => write!(f, "fn {name}"),
             Expr::If {
                 condition,
                 then_branch,
@@ -231,7 +227,7 @@ impl Display for Expr {
                 write!(f, "yeet yeet")
             }
             Expr::Reference(id) => write!(f, "ref({id})"),
-            Expr::New { def: name, args } => {
+            Expr::Make { def: name, args } => {
                 write!(f, "{} {{", name.0)?;
                 for (name, value) in args {
                     write!(f, "{}: {}, ", name, value.0)?;
@@ -241,6 +237,13 @@ impl Display for Expr {
             Expr::FieldAccess { base, field } => write!(f, "{}.{}", base.0, field),
             Expr::MethodCall { base, method, args } => {
                 write!(f, "{}.{}(", base.0, method)?;
+                for arg in args {
+                    write!(f, "{}, ", arg.0)?;
+                }
+                write!(f, ")")
+            }
+            Expr::StaticMethodCall { base, method, args } => {
+                write!(f, "{}::{}(", base.0, method)?;
                 for arg in args {
                     write!(f, "{}, ", arg.0)?;
                 }

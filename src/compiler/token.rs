@@ -38,6 +38,7 @@ pub enum Token {
     Semicolon,
     Colon,
     Pipe,
+    ScopeResolution,
 
     // Keywords
     Let,
@@ -51,7 +52,7 @@ pub enum Token {
     Return,
     Try,
     Catch,
-    New,
+    Make,
     Fn,
     In,
 }
@@ -95,6 +96,7 @@ impl std::fmt::Display for Token {
             Token::RightBracket => write!(f, "]"),
             Token::Comma => write!(f, ","),
             Token::Dot => write!(f, "."),
+            Token::ScopeResolution => write!(f, "::"),
             Token::Let => write!(f, "let"),
             Token::Struct => write!(f, "struct"),
             Token::If => write!(f, "if"),
@@ -106,7 +108,7 @@ impl std::fmt::Display for Token {
             Token::Return => write!(f, "return"),
             Token::Try => write!(f, "try"),
             Token::Catch => write!(f, "catch"),
-            Token::New => write!(f, "new"),
+            Token::Make => write!(f, "new"),
             Token::Semicolon => write!(f, ";"),
             Token::Pipe => write!(f, "|"),
             Token::Colon => write!(f, ":"),

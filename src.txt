@@ -1,7 +1,4 @@
-let mod = import("module.txt")
+let module = import("module.txt")
 
-let q = new mod.Quux {
-	yoinky: 1
-}
-
-q.sploinky()
+let f = module.Foo::new()
+f.fuck("moony")

@@ -1,15 +1,15 @@
 use crate::{
-    compiler::exprs::Expr,
+    compiler::exprs::{CallableKind, Expr},
     interpreter::{
         method_type::MethodType,
-        structs::{Iterable, StructBuilder, StructInterface},
+        structs::{Iterable, StructDefinitionInterface, StructInterface},
         Interpreter,
     },
 };
 
 use super::exception::Exception;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct List {
     items: Vec<Expr>,
 }
@@ -33,16 +33,16 @@ impl List {
 }
 
 impl StructInterface for List {
-    fn get_method(&self, name: &str) -> Option<MethodType> {
-        match name {
-            "push" => Some(MethodType::Native(|interpreter, args| {
+    fn get(&self, name: &str) -> Option<Expr> {
+        let val = MethodType::Native(match name {
+            "push" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let item = args[0].clone();
                     this.push(item);
                     Ok(Expr::Null)
                 })
-            })),
-            "get" => Some(MethodType::Native(|interpreter, args| {
+            },
+            "get" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let index = match args[0] {
                         Expr::Number(n) => n as usize,
@@ -51,12 +51,14 @@ impl StructInterface for List {
                     this.get(index)
                         .ok_or_else(|| Exception::new("Index out of bounds"))
                 })
-            })),
-            "len" => Some(MethodType::Native(|interpreter, _args| {
+            },
+            "len" => |interpreter, _args| {
                 interpreter.with_this(|this: &mut Self| Ok(Expr::Number(this.len() as f64)))
-            })),
-            _ => None,
-        }
+            },
+            _ => return None,
+        });
+
+        Some(Expr::Callable(CallableKind::Method(Box::new(val))))
     }
 
     fn iter(&self) -> Option<Box<dyn Iterable>> {
@@ -66,7 +68,7 @@ impl StructInterface for List {
 
 #[derive(Clone)]
 pub struct ListBuilder {}
-impl StructBuilder for ListBuilder {
+impl StructDefinitionInterface for ListBuilder {
     fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
         let items = args.into_iter().map(|(_, e)| e).collect();
         Ok(Box::new(List::new(items)))

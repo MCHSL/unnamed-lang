@@ -27,7 +27,7 @@ impl std::fmt::Debug for NativeFunc {
 pub enum MethodType {
     Native(NativeMethod),
     UserDefined {
-        args: Vec<String>,
+        arg_names: Vec<String>,
         body: Spanned<Expr>,
     },
 }
@@ -37,9 +37,12 @@ impl PartialEq for MethodType {
         match (self, other) {
             (Self::Native(f), Self::Native(g)) => std::ptr::eq(f as *const _, g as *const _),
             (
-                Self::UserDefined { args, body },
                 Self::UserDefined {
-                    args: args2,
+                    arg_names: args,
+                    body,
+                },
+                Self::UserDefined {
+                    arg_names: args2,
                     body: body2,
                 },
             ) => args == args2 && body == body2,
@@ -52,7 +55,10 @@ impl std::fmt::Debug for MethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Native(_) => write!(f, "Native"),
-            Self::UserDefined { args, body } => {
+            Self::UserDefined {
+                arg_names: args,
+                body,
+            } => {
                 write!(f, "UserDefined {{ args: {args:?}, body: {body:?} }}")
             }
         }

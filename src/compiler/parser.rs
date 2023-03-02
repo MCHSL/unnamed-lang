@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chumsky::prelude::*;
+use itertools::{Either, Itertools};
 
 use crate::interpreter::{
     method_type::MethodType,
@@ -9,11 +10,11 @@ use crate::interpreter::{
 
 use super::{
     common::{Span, Spanned},
-    exprs::Expr,
+    exprs::{CallableKind, Expr},
     token::Token,
 };
 
-pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
+pub fn parser(module: usize) -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
     let ident =
         select! { |span| Token::Ident(ident) => (Expr::Ident(ident), span) }.labelled("identifier");
 
@@ -25,7 +26,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
     //     )),
     // });
 
-    let statement = recursive(|stmt| {
+    let statement = recursive(move |stmt| {
         let block = just(Token::LeftBrace)
             .ignore_then(stmt.repeated())
             .then_ignore(just(Token::RightBrace))
@@ -77,14 +78,14 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                 }))
                 .map_with_span(|((args, args_span), body), body_span: Span| {
                     (
-                        Expr::Lambda {
+                        Expr::Callable(CallableKind::Lambda {
                             arg_names: args
                                 .into_iter()
                                 .map(|(name, _)| name.ident_string())
                                 .collect(),
                             body: Box::new(body),
                             environment: HashMap::new(),
-                        },
+                        }),
                         args_span.start()..body_span.end(),
                     )
                 });
@@ -154,7 +155,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     ((name.0.ident_string(), value), span)
                 });
 
-            let new = just(Token::New)
+            let new = just(Token::Make)
                 .map_with_span(|_, span: Span| ((), span))
                 .then(expr.clone())
                 .then_ignore(just(Token::LeftBrace))
@@ -167,7 +168,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                         .collect();
 
                     (
-                        Expr::New {
+                        Expr::Make {
                             def: Box::new(name),
                             args: field_map,
                         },
@@ -175,36 +176,47 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     )
                 });
 
-            let access_chain =
-                just(Token::Dot).ignore_then(ident.then(argument_list.clone().or_not()));
+            let access_chain = just(Token::Dot)
+                .or(just(Token::ScopeResolution))
+                .then(ident.then(argument_list.clone().or_not()));
 
             let access_chain = access_chain.labelled("access chain");
 
             let access_chain = ident
                 .then(access_chain.repeated())
-                .foldl(|base, ((field, field_span), args)| match args {
-                    Some(args) => {
-                        let span = base.1.start()..args.1.end();
-                        (
-                            Expr::MethodCall {
-                                base: Box::new(base),
-                                method: field.ident_string(),
-                                args: args.0.into_iter().map(Box::new).collect(),
-                            },
-                            span,
-                        )
-                    }
-                    None => {
-                        let span = base.1.start()..field_span.end();
-                        (
-                            Expr::FieldAccess {
-                                base: Box::new(base),
-                                field: field.ident_string(),
-                            },
-                            span,
-                        )
-                    }
-                })
+                .foldl(
+                    |base, (access_op, ((field, field_span), args))| match args {
+                        Some(args) => {
+                            let span = base.1.start()..args.1.end();
+                            (
+                                match access_op {
+                                    Token::Dot => Expr::MethodCall {
+                                        base: Box::new(base),
+                                        method: field.ident_string(),
+                                        args: args.0.into_iter().collect(),
+                                    },
+                                    Token::ScopeResolution => Expr::StaticMethodCall {
+                                        base: Box::new(base),
+                                        method: field.ident_string(),
+                                        args: args.0.into_iter().map(Box::new).collect(),
+                                    },
+                                    _ => unreachable!(),
+                                },
+                                span,
+                            )
+                        }
+                        None => {
+                            let span = base.1.start()..field_span.end();
+                            (
+                                Expr::FieldAccess {
+                                    base: Box::new(base),
+                                    field: field.ident_string(),
+                                },
+                                span,
+                            )
+                        }
+                    },
+                )
                 .labelled("access chain")
                 .boxed();
 
@@ -259,7 +271,7 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
                     (
                         Expr::Call {
                             name: Box::new(lhs),
-                            args: (rhs.0.into_iter().map(Box::new).collect(), rhs.1),
+                            args: (rhs.0.into_iter().collect(), rhs.1),
                         },
                         span,
                     )
@@ -427,30 +439,34 @@ pub fn parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
             .then(method_def.repeated())
             .then_ignore(just(Token::RightBrace))
             .map_with_span(
-                |(((name, _name_span), field_names), methods), struct_span: Span| {
+                move |(((name, _name_span), field_names), methods), struct_span: Span| {
                     let field_map = field_names
                         .into_iter()
                         .map(|(name, span)| (name.ident_string(), (Expr::Null, span)))
                         .collect();
 
-                    let method_map = methods
+                    let (methods, statics) = methods
                         .into_iter()
                         .map(|(((name, _name_span), (args, _args_span)), body)| {
-                            (
-                                name.ident_string(),
-                                MethodType::UserDefined {
-                                    args: args.into_iter().map(|a| a.0.ident_string()).collect(),
-                                    body,
-                                },
-                            )
+                            let arg_names: Vec<String> =
+                                args.into_iter().map(|a| a.0.ident_string()).collect();
+                            (name.ident_string(), arg_names, body)
                         })
-                        .collect();
+                        .partition_map(|(name, arg_names, body): (_, Vec<String>, _)| {
+                            let kind = match arg_names.get(0) {
+                                Some(s) if s.as_str() == "self" => Either::Left,
+                                _ => Either::Right,
+                            };
+                            kind((name, MethodType::UserDefined { arg_names, body }))
+                        });
 
                     (
                         Expr::StructDefinitionStatement(StructDef {
                             name: name.ident_string(),
                             fields: field_map,
-                            methods: method_map,
+                            methods,
+                            static_methods: statics,
+                            defined_in: module.clone(),
                         }),
                         struct_span.start()..struct_span.end(),
                     )
@@ -484,7 +500,7 @@ mod tests {
         ];
         let len = input.chars().count();
         let (result, errors) =
-            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+            parser(0).parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
         assert!(errors.is_empty());
         let result = result.unwrap().0;
         assert_eq!(

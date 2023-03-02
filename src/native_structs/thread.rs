@@ -1,10 +1,11 @@
 use crate::{
-    compiler::exprs::Expr,
+    compiler::exprs::{CallableKind, Expr},
     interpreter::{method_type::MethodType, structs::StructInterface},
 };
 
 use super::exception::{Exception, IResult};
 
+#[derive(Debug)]
 pub struct ThreadHandle {
     handle: Option<std::thread::JoinHandle<IResult<Expr>>>,
 }
@@ -29,11 +30,13 @@ impl ThreadHandle {
 }
 
 impl StructInterface for ThreadHandle {
-    fn get_method(&self, name: &str) -> Option<MethodType> {
+    fn get(&self, name: &str) -> Option<Expr> {
         match name {
-            "join" => Some(MethodType::Native(|interpreter, _args| {
-                interpreter.with_this(|this: &mut Self| this.join())
-            })),
+            "join" => Some(Expr::Callable(CallableKind::Method(Box::new(
+                MethodType::Native(|interpreter, _args| {
+                    interpreter.with_this(|this: &mut Self| this.join())
+                }),
+            )))),
             _ => None,
         }
     }

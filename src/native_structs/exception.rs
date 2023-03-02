@@ -1,8 +1,11 @@
 use crate::{
-    compiler::{common::Spanned, exprs::Expr},
+    compiler::{
+        common::Spanned,
+        exprs::{CallableKind, Expr},
+    },
     interpreter::{
         method_type::MethodType,
-        structs::{StructBuilder, StructInterface},
+        structs::{StructDefinitionInterface, StructInterface},
     },
 };
 
@@ -61,10 +64,14 @@ macro_rules! except {
 
 impl StructInterface for Exception {
     fn get(&self, name: &str) -> Option<Expr> {
-        match name {
-            "message" => Some(Expr::Str(self.message.clone())),
-            _ => None,
-        }
+        let val = match name {
+            "message" => Expr::Str(self.message.clone()),
+            "__str__" => Expr::Callable(CallableKind::Method(Box::new(MethodType::Native(
+                |interpreter, _args| interpreter.with_this(|this: &mut Self| this.__str__()),
+            )))),
+            _ => return None,
+        };
+        Some(val)
     }
 
     fn set(&mut self, name: &str, _value: Expr) {
@@ -72,20 +79,11 @@ impl StructInterface for Exception {
             panic!("Cannot set `message` on Exception");
         }
     }
-
-    fn get_method(&self, name: &str) -> Option<MethodType> {
-        match name {
-            "__str__" => Some(MethodType::Native(|interpreter, _args| {
-                interpreter.with_this(|this: &mut Self| this.__str__())
-            })),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone)]
 pub struct ExceptionBuilder {}
-impl StructBuilder for ExceptionBuilder {
+impl StructDefinitionInterface for ExceptionBuilder {
     fn construct(&self, args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
         let arg = args
             .get(0)

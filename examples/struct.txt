@@ -6,7 +6,7 @@ struct Hello {
 	}
 }
 
-let hello = new Hello {
+let hello = make Hello {
 	recipient: "World"
 }
 

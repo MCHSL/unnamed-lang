@@ -4,16 +4,17 @@ use std::{
 };
 
 use crate::{
-    compiler::exprs::Expr,
+    compiler::exprs::{CallableKind, Expr},
     interpreter::{
-        method_type::MethodType,
-        structs::{Iterable, StructBuilder, StructInterface},
+        method_type::{MethodType, NativeFunc, NativeMethod},
+        structs::{Iterable, StructDefinitionInterface, StructInterface},
         Interpreter,
     },
 };
 
 use super::exception::Exception;
 
+#[derive(Debug)]
 pub struct Socket {
     stream: Option<TcpStream>,
     listener: Option<TcpListener>,
@@ -106,12 +107,12 @@ impl Socket {
 }
 
 impl StructInterface for Socket {
-    fn get_method(&self, name: &str) -> Option<MethodType> {
-        match name {
-            "__str__" => Some(MethodType::Native(|interpreter, _args| {
-                interpreter.with_this(|this: &mut Self| this.__str__())
-            })),
-            "connect" => Some(MethodType::Native(|interpreter, args| {
+    fn get(&self, name: &str) -> Option<Expr> {
+        let meth = MethodType::Native(match name {
+            "__str__" => {
+                |interpreter, _args| interpreter.with_this(|this: &mut Self| this.__str__())
+            }
+            "connect" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let host = match args.get(0) {
                         Some(Expr::Str(host)) => host,
@@ -121,13 +122,13 @@ impl StructInterface for Socket {
                         Some(Expr::Number(port)) => *port as u16,
                         _ => return Err(Exception::new("Expected number for port")),
                     };
-                    match this.connect(host, port) {
+                    match this.connect(&host, port) {
                         Ok(_) => Ok(Expr::Null),
                         Err(e) => Err(Exception::new(e)),
                     }
                 })
-            })),
-            "send" => Some(MethodType::Native(|interpreter, args| {
+            },
+            "send" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let data = match args.get(0) {
                         Some(Expr::Str(data)) => data.as_bytes(),
@@ -138,8 +139,8 @@ impl StructInterface for Socket {
                         Err(e) => Err(Exception::new(e)),
                     }
                 })
-            })),
-            "recv" => Some(MethodType::Native(|interpreter, args| {
+            },
+            "recv" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let size = match args.get(0) {
                         Some(Expr::Number(size)) => *size as usize,
@@ -150,14 +151,14 @@ impl StructInterface for Socket {
                         Err(e) => Err(Exception::new(e)),
                     }
                 })
-            })),
-            "close" => Some(MethodType::Native(|interpreter, _args| {
+            },
+            "close" => |interpreter, _args| {
                 interpreter.with_this(|this: &mut Self| match this.close() {
                     Ok(_) => Ok(Expr::Null),
                     Err(e) => Err(Exception::new(e)),
                 })
-            })),
-            "listen" => Some(MethodType::Native(|interpreter, args| {
+            },
+            "listen" => |interpreter, args| {
                 interpreter.with_this(|this: &mut Self| {
                     let host = match args.get(0) {
                         Some(Expr::Str(host)) => host,
@@ -167,13 +168,13 @@ impl StructInterface for Socket {
                         Some(Expr::Number(port)) => *port as u16,
                         _ => return Err(Exception::new("Expected number for port")),
                     };
-                    match this.listen(host, port) {
+                    match this.listen(&host, port) {
                         Ok(_) => Ok(Expr::Null),
                         Err(e) => Err(Exception::new(e)),
                     }
                 })
-            })),
-            "accept" => Some(MethodType::Native(|interpreter, _args| {
+            },
+            "accept" => |interpreter, _args| {
                 let result = interpreter.with_this(|this: &mut Self| this.accept());
                 match result {
                     Ok(socket) => {
@@ -183,8 +184,8 @@ impl StructInterface for Socket {
                     }
                     Err(e) => Err(Exception::new(e)),
                 }
-            })),
-            "accept_many" => Some(MethodType::Native(|interpreter, _args| {
+            },
+            "accept_many" => |interpreter, _args| {
                 let proxy =
                     Box::new(
                         interpreter.with_this(|this: &mut Self| SocketAcceptIteratorProxy {
@@ -194,20 +195,23 @@ impl StructInterface for Socket {
 
                 let id = interpreter.add_instance(proxy);
                 Ok(Expr::Reference(id))
-            })),
-            _ => None,
-        }
+            },
+            _ => return None,
+        });
+
+        Some(Expr::Callable(CallableKind::Method(Box::new(meth))))
     }
 }
 
 #[derive(Clone)]
 pub struct SocketBuilder {}
-impl StructBuilder for SocketBuilder {
+impl StructDefinitionInterface for SocketBuilder {
     fn construct(&self, _args: Vec<(String, Expr)>) -> Result<Box<dyn StructInterface>, Exception> {
         Ok(Box::new(Socket::new()))
     }
 }
 
+#[derive(Debug)]
 pub struct SocketAcceptIteratorProxy {
     socket: TcpListener,
 }
@@ -217,10 +221,6 @@ impl StructInterface for SocketAcceptIteratorProxy {
         Some(Box::new(SocketAcceptIterator {
             socket: self.socket.try_clone().unwrap(),
         }))
-    }
-
-    fn get_method(&self, _name: &str) -> Option<MethodType> {
-        None
     }
 }
 

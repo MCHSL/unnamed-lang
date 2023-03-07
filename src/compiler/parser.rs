@@ -84,7 +84,7 @@ pub fn parser(module: usize) -> impl Parser<Token, Spanned<Expr>, Error = Simple
                                 .map(|(name, _)| name.ident_string())
                                 .collect(),
                             body: Box::new(body),
-                            environment: HashMap::new(),
+                            environment: None,
                         }),
                         args_span.start()..body_span.end(),
                     )

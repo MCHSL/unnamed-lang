@@ -12,7 +12,7 @@ pub enum CallableKind {
     Lambda {
         arg_names: Vec<String>,
         body: BExpr,
-        environment: HashMap<String, Expr>,
+        environment: Option<HashMap<String, Expr>>,
     },
 
     Method(Box<MethodType>),
@@ -108,6 +108,11 @@ pub enum Expr {
     },
 
     FieldAccess {
+        base: BExpr,
+        field: String,
+    },
+
+    StaticFieldAccess {
         base: BExpr,
         field: String,
     },

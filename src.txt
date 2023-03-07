@@ -1,4 +1,5 @@
-let module = import("module.txt")
+let mod = import("module.txt")
+let Foo = mod.Foo
 
-let f = module.Foo::new()
-f.fuck("moony")
+let f = Foo::new
+let fuck = f.fuck("moony")

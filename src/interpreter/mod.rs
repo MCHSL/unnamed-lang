@@ -182,7 +182,10 @@ impl Interpreter {
                             .get("__str__")
                             .ok_or_else(|| Exception::new("Invalid reference"))
                     })?;
-                    match interpreter.call_callable((method, 0..0), id, &vec![])? {
+                    let result = interpreter.with_set_this(id, |interp| {
+                        interp.call_callable((method, 0..0), &vec![])
+                    })?;
+                    match result {
                         Expr::Str(s) => s,
                         _ => return Err(Exception::new("Invalid return type from __str__ method")),
                     }
@@ -243,7 +246,7 @@ impl Interpreter {
             let environment = interpreter.clone_environment();
             let thread = std::thread::spawn(move || {
                 let mut interpreter = Self::new(instances, next_id);
-                interpreter.call_callable((arg, 0..0), 0, &vec![])
+                interpreter.call_callable((arg, 0..0), &vec![])
             });
 
             let thread = Box::new(ThreadHandle::new(thread));
@@ -447,7 +450,6 @@ impl Interpreter {
     fn call_callable(
         &mut self,
         callable_expr: Spanned<Expr>,
-        this: usize,
         args: &Vec<Spanned<Expr>>,
     ) -> IResult<Expr> {
         let callable = match callable_expr.0.clone() {
@@ -463,10 +465,12 @@ impl Interpreter {
                 environment,
             } => {
                 let mut scope = HashMap::new();
+                if environment.is_some() {
+                    scope.extend(environment.unwrap());
+                }
                 for (arg_name, arg) in arg_names.iter().zip(args.iter()) {
                     scope.insert(arg_name.clone(), arg.clone());
                 }
-                scope.extend(environment);
 
                 self.eval_block(&body, scope)
             }
@@ -478,6 +482,9 @@ impl Interpreter {
 
             CallableKind::Method(m) => match *m {
                 MethodType::UserDefined { arg_names, body } => {
+                    let this = self.this.ok_or_else(|| {
+                        Exception::new_with_expr("Called method without this", callable_expr)
+                    })?;
                     args.insert(0, Expr::Reference(this));
                     let mut new_vars = HashMap::new();
                     for (name, val) in arg_names.iter().zip(args.into_iter()) {
@@ -486,7 +493,7 @@ impl Interpreter {
                     self.eval_block(&body, new_vars)
                 }
                 MethodType::Native(func) => {
-                    let result = self.with_set_this(this, |interp| func(interp, args));
+                    let result = func(self, args);
                     result.map_err(|e| Exception::new_with_expr(e.message(), callable_expr))
                 }
             },
@@ -512,7 +519,9 @@ impl Interpreter {
                 } => Ok(Expr::Callable(CallableKind::Lambda {
                     arg_names: arg_names.clone(),
                     body: body.clone(),
-                    environment: self.clone_environment(),
+                    environment: environment
+                        .clone()
+                        .or_else(|| Some(self.clone_environment())),
                 })),
                 _ => Ok(expr.0.clone()),
             },
@@ -728,7 +737,7 @@ impl Interpreter {
                     return except!(expr.clone(), "Undefined variable {}", sname);
                 };
                 let function = function.unwrap();
-                self.call_callable((function, name.1.clone()), 0, &args.0)
+                self.call_callable((function, name.1.clone()), &args.0)
             }
 
             // Struct definition
@@ -803,7 +812,12 @@ impl Interpreter {
                             except!(expr.clone(), "Undefined field {}", field)
                         }
                     }),
-                    _ => except!(expr.clone(), "Expected reference, got {:?}", base),
+                    _ => except!(
+                        expr.clone(),
+                        "Expected reference when getting field {}, got {:?}",
+                        field,
+                        base
+                    ),
                 }
             }
 
@@ -821,7 +835,9 @@ impl Interpreter {
                             );
                         }
                         let omethod = omethod.unwrap();
-                        self.call_callable((omethod, base.1.clone()), id, &args)
+                        self.with_set_this(id, |interp| {
+                            interp.call_callable((omethod, base.1.clone()), args)
+                        })
                     }
                     _ => except!(expr.clone(), "Expected reference, got {:?}", base),
                 }
